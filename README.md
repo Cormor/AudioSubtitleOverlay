@@ -1,8 +1,44 @@
-# Windows 系统音频识别与翻译悬浮窗
+# Windows 系统音频识别与翻译悬浮窗 | Audio Subtitle Overlay
 
-这是一个 Windows 桌面应用，用于采集当前扬声器正在播放的音频，使用本地 `faster-whisper` 识别，并在可拖动、可调整大小的悬浮窗中同时显示源语言和译文。
+<p align="center">
+  <img src="docs/screenshots/main-window.png" alt="AudioSubtitleOverlay 主窗口 / main window" width="720">
+</p>
 
-应用使用组件清单和内部下载器管理语音模型与可选GPU运行库。主程序包不再内置大模型和CUDA用户态运行库；首次使用时按固定版本、文件大小和SHA256准备缺失组件。
+## 中文简介
+
+AudioSubtitleOverlay 是一个 Windows 桌面应用：采集当前扬声器正在播放的音频，使用本地 `faster-whisper` 识别，并在可拖动、可调整大小的悬浮窗中同时显示源语言和译文。
+
+- 默认识别模型为 `tiny`，也可以在设置中选择其他已准备的模型。
+- 主程序压缩包不内置大模型和 CUDA 用户态运行库，当前精简包约 111 MB；缺少组件时由应用放入当前用户目录并执行固定大小、SHA256 校验。
+- 可单独下载约 67 MB 的 tiny 模型包；将两个压缩包解压到同一个父目录即可离线携带 tiny 模型。
+- 解压后保留 `AudioSubtitleOverlay` 目录及其中的 `_internal`，直接双击 `AudioSubtitleOverlay.exe` 运行，不要求朋友电脑预装 Python。
+- 识别文本会过滤 `字幕by昵称` 及常见大小写、空格和分隔符变体，不把该署名送入翻译或字幕历史。
+
+发布包位于 [GitHub Releases](https://github.com/Cormor/AudioSubtitleOverlay/releases)，源码、组件清单和构建说明位于当前仓库。
+
+## English introduction
+
+AudioSubtitleOverlay is a Windows desktop overlay that captures system playback audio, runs local speech recognition with `faster-whisper`, and displays the source text and translation in a movable, resizable subtitle window.
+
+- The default recognition model is `tiny`; other prepared models can be selected in the settings.
+- The main portable ZIP does not bundle a large speech model or CUDA user-mode libraries. The current slim package is about 111 MB; missing components are prepared in the current user's data directory and verified by fixed size and SHA256 checks.
+- A separate tiny-model ZIP of about 67 MB is available for offline distribution. Extract both ZIP files under the same parent directory to carry the tiny model with the application.
+- Keep the complete `AudioSubtitleOverlay` directory, including `_internal`, after extraction. Double-click `AudioSubtitleOverlay.exe`; Python does not need to be installed on the recipient's computer.
+- Branding lines such as `字幕by昵称`, including common case, whitespace, and separator variants, are removed before translation and subtitle history storage.
+
+Download the packaged builds from [GitHub Releases](https://github.com/Cormor/AudioSubtitleOverlay/releases). The repository also contains the source code, component manifest, and Windows build instructions.
+
+## 快速开始 | Quick start
+
+1. 下载主程序 ZIP；需要离线携带 `tiny` 模型时，再下载 tiny 模型 ZIP。
+2. 将 ZIP 解压到同一个父目录；不要删除主程序目录中的 `_internal`。
+3. 双击 `AudioSubtitleOverlay.exe`，在界面中选择音频来源、源语言、目标语言和模型。
+4. 首次缺少模型或 GPU 用户态运行库时，应用会按清单下载并校验；没有网络时可使用已准备的本地模型或 tiny 模型包。
+
+1. Download the main application ZIP. Download the tiny-model ZIP as well when offline model distribution is required.
+2. Extract both ZIP files under the same parent directory and keep the complete `_internal` directory.
+3. Double-click `AudioSubtitleOverlay.exe`, then select the audio source, source language, target language, and model.
+4. If a model or GPU user-mode runtime is missing, the application downloads and verifies it according to the manifest. Offline use requires a locally prepared model or the tiny-model package.
 
 ## 已实现能力
 
