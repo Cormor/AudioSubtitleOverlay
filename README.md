@@ -83,6 +83,8 @@ package_windows.bat
 
 脚本会把 `dist_minimal\\AudioSubtitleOverlay` 整体压缩，并在压缩包内写入 `使用说明.txt`。转发时不要删除 `_internal`，也不要把模型目录或GPU wheel直接复制进主包。
 
+同一脚本还会生成独立的 `AudioSubtitleOverlay_tiny模型_YYYYMMDD.zip`。需要离线携带模型时，把两个压缩包解压到同一个父目录，tiny模型会合并到 `AudioSubtitleOverlay\\models\\tiny`；不提供独立模型包时，主程序会按组件清单自动下载 tiny。
+
 运行时组件下载不是Python `pip install`，不会依赖朋友电脑预装Python。GPU wheel下载后由内部下载器校验并解压到用户目录，再由当前进程加入DLL搜索路径。
 
 精简版主包不包含模型和NVIDIA用户态运行库；当前构建产物的主要体积来自应用自身的Python、Tk、CTranslate2、VAD和翻译依赖。首次使用GPU时，运行库会在用户目录单独下载和解压，因此不计入主压缩包体积。

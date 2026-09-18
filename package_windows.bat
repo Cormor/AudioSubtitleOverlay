@@ -13,5 +13,11 @@ if errorlevel 1 (
     exit /b 1
 )
 
+python package_tiny_model.py
+if errorlevel 1 (
+    echo 创建tiny模型压缩包失败。
+    exit /b 1
+)
+
 echo 压缩包创建完成。
 endlocal
