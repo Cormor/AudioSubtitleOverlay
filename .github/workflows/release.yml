@@ -46,12 +46,12 @@ jobs:
           $assetDirectory = "release-assets"
           New-Item -ItemType Directory -Force -Path $assetDirectory | Out-Null
 
-          $mainAsset = Join-Path $assetDirectory "AudioSubtitleOverlay_精简版_20260918.zip"
-          $tinyAsset = Join-Path $assetDirectory "AudioSubtitleOverlay_tiny模型_20260918.zip"
+          $mainAsset = Join-Path $assetDirectory "AudioSubtitleOverlay_Portable_20260918.zip"
+          $tinyAsset = Join-Path $assetDirectory "AudioSubtitleOverlay_tiny_model_20260918.zip"
           Copy-Item $mainSource.FullName $mainAsset -Force
           Copy-Item $tinySource.FullName $tinyAsset -Force
 
-          python -c 'from zipfile import ZipFile; paths=[r"release-assets\AudioSubtitleOverlay_精简版_20260918.zip", r"release-assets\AudioSubtitleOverlay_tiny模型_20260918.zip"]; assert all(ZipFile(path).testzip() is None for path in paths)'
+          python -c 'from zipfile import ZipFile; paths=[r"release-assets\AudioSubtitleOverlay_Portable_20260918.zip", r"release-assets\AudioSubtitleOverlay_tiny_model_20260918.zip"]; assert all(ZipFile(path).testzip() is None for path in paths)'
 
           $mainInfo = Get-Item $mainAsset
           $tinyInfo = Get-Item $tinyAsset
@@ -72,8 +72,8 @@ jobs:
           Set-Content "release-assets\RELEASE_NOTES.md" -Value $notes -Encoding utf8
 
           @"
-          $mainHash  AudioSubtitleOverlay_精简版_20260918.zip
-          $tinyHash  AudioSubtitleOverlay_tiny模型_20260918.zip
+          $mainHash  AudioSubtitleOverlay_Portable_20260918.zip
+          $tinyHash  AudioSubtitleOverlay_tiny_model_20260918.zip
           "@ | Set-Content "release-assets\SHA256SUMS.txt" -Encoding ascii
 
       - name: 创建 GitHub Release 并上传资产
@@ -81,12 +81,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: v1.0.0
-        run: >-
-          gh release create $env:RELEASE_TAG
-          release-assets/AudioSubtitleOverlay_精简版_20260918.zip
-          release-assets/AudioSubtitleOverlay_tiny模型_20260918.zip
-          release-assets/SHA256SUMS.txt
-          --repo $env:GITHUB_REPOSITORY
-          --title "AudioSubtitleOverlay $env:RELEASE_TAG"
-          --notes-file release-assets/RELEASE_NOTES.md
-          --target $env:GITHUB_SHA
+        run: |
+          $ErrorActionPreference = "Stop"
+          $repo = $env:GITHUB_REPOSITORY
+          $tag = $env:RELEASE_TAG
+          $mainAsset = "release-assets/AudioSubtitleOverlay_Portable_20260918.zip#AudioSubtitleOverlay_Portable_20260918.zip"
+          $tinyAsset = "release-assets/AudioSubtitleOverlay_tiny_model_20260918.zip#AudioSubtitleOverlay_tiny_model_20260918.zip"
+
+          gh release view $tag --repo $repo *> $null
+          $releaseExists = ($LASTEXITCODE -eq 0)
+          if ($releaseExists) {
+            gh release delete-asset $tag "AudioSubtitleOverlay_._20260918.zip" --repo $repo --yes
+            if ($LASTEXITCODE -ne 0) { Write-Host "旧主程序资产不存在，继续上传。" }
+            gh release delete-asset $tag "AudioSubtitleOverlay_tiny._20260918.zip" --repo $repo --yes
+            if ($LASTEXITCODE -ne 0) { Write-Host "旧 tiny 资产不存在，继续上传。" }
+            gh release upload $tag $mainAsset $tinyAsset "release-assets/SHA256SUMS.txt" --repo $repo --clobber
+            gh release edit $tag --repo $repo --title "AudioSubtitleOverlay $tag" --notes-file "release-assets/RELEASE_NOTES.md"
+          } else {
+            gh release create $tag $mainAsset $tinyAsset "release-assets/SHA256SUMS.txt" --repo $repo --title "AudioSubtitleOverlay $tag" --notes-file "release-assets/RELEASE_NOTES.md" --target $env:GITHUB_SHA
+          }

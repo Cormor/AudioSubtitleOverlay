@@ -20,9 +20,9 @@ AudioSubtitleOverlay 是 Windows 桌面应用，可采集系统播放回环或�
 
 ### 快速开始
 
-1. 下载 `AudioSubtitleOverlay_精简版_20260918.zip`。
+1. 下载 `AudioSubtitleOverlay_Portable_20260918.zip`。
 2. 解压后保留完整的 `AudioSubtitleOverlay` 文件夹。
-3. 需要离线携带 tiny 模型时，再下载 `AudioSubtitleOverlay_tiny模型_20260918.zip`，将它解压到与主程序包相同的父目录，并合并同名的 `AudioSubtitleOverlay` 文件夹。
+3. 需要离线携带 tiny 模型时，再下载 `AudioSubtitleOverlay_tiny_model_20260918.zip`，将它解压到与主程序包相同的父目录，并合并同名的 `AudioSubtitleOverlay` 文件夹。
 4. 双击 `AudioSubtitleOverlay\AudioSubtitleOverlay.exe`。
 5. 在程序中选择音频来源、语言和模型。
 
@@ -34,8 +34,8 @@ AudioSubtitleOverlay 是 Windows 桌面应用，可采集系统播放回环或�
 
 | 文件 | 用途 | 大小 | SHA256 |
 | --- | --- | ---: | --- |
-| `AudioSubtitleOverlay_精简版_20260918.zip` | 主程序、可直接双击运行 | {{MAIN_SIZE}} | `{{MAIN_SHA256}}` |
-| `AudioSubtitleOverlay_tiny模型_20260918.zip` | 可选 tiny 模型离线包 | {{TINY_SIZE}} | `{{TINY_SHA256}}` |
+| `AudioSubtitleOverlay_Portable_20260918.zip` | 主程序、可直接双击运行 | {{MAIN_SIZE}} | `{{MAIN_SHA256}}` |
+| `AudioSubtitleOverlay_tiny_model_20260918.zip` | 可选 tiny 模型离线包 | {{TINY_SIZE}} | `{{TINY_SHA256}}` |
 
 两个压缩包是独立资产。主程序包约 105.89 MiB，低于 150 MiB；tiny 模型包按需下载，不强制放入主程序包。
 
@@ -59,9 +59,9 @@ AudioSubtitleOverlay is a Windows desktop application that captures system playb
 
 ### Quick start
 
-1. Download `AudioSubtitleOverlay_精简版_20260918.zip`.
+1. Download `AudioSubtitleOverlay_Portable_20260918.zip`.
 2. Extract it and keep the complete `AudioSubtitleOverlay` directory.
-3. For offline distribution of the tiny model, also download `AudioSubtitleOverlay_tiny模型_20260918.zip`, extract it under the same parent directory, and merge the `AudioSubtitleOverlay` directory.
+3. For offline distribution of the tiny model, also download `AudioSubtitleOverlay_tiny_model_20260918.zip`, extract it under the same parent directory, and merge the `AudioSubtitleOverlay` directory.
 4. Double-click `AudioSubtitleOverlay\AudioSubtitleOverlay.exe`.
 5. Select the audio source, languages, and model in the application.
 
@@ -73,8 +73,8 @@ If no local model is available, the application downloads and verifies the defau
 
 | File | Purpose | Size | SHA256 |
 | --- | --- | ---: | --- |
-| `AudioSubtitleOverlay_精简版_20260918.zip` | Main portable application | {{MAIN_SIZE}} | `{{MAIN_SHA256}}` |
-| `AudioSubtitleOverlay_tiny模型_20260918.zip` | Optional offline tiny-model package | {{TINY_SIZE}} | `{{TINY_SHA256}}` |
+| `AudioSubtitleOverlay_Portable_20260918.zip` | Main portable application | {{MAIN_SIZE}} | `{{MAIN_SHA256}}` |
+| `AudioSubtitleOverlay_tiny_model_20260918.zip` | Optional offline tiny-model package | {{TINY_SIZE}} | `{{TINY_SHA256}}` |
 
 The two ZIP files are separate release assets. The main package is about 105.89 MiB and stays below the 150 MiB target; the tiny-model package is optional.
 
