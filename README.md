@@ -1,164 +1,62 @@
-# Windows 系统音频识别与翻译悬浮窗 | Audio Subtitle Overlay
+# Windows 系统音频识别与双语字幕悬浮窗 | Audio Subtitle Overlay
 
 <p align="center">
   <img src="docs/screenshots/main-window.png" alt="AudioSubtitleOverlay 主窗口 / main window" width="720">
 </p>
 
-## 中文简介
+## 中文
 
-AudioSubtitleOverlay 是一个 Windows 桌面应用：采集当前扬声器正在播放的音频，使用本地 `faster-whisper` 识别，并在可拖动、可调整大小的悬浮窗中同时显示源语言和译文。
+AudioSubtitleOverlay 是 Windows 桌面悬浮字幕应用，可识别系统播放声音或麦克风输入，并同时显示源文本和译文。
 
-- 默认识别模型为 `tiny`，也可以在设置中选择其他已准备的模型。
-- 主程序压缩包不内置大模型和 CUDA 用户态运行库，当前精简包约 111 MB；缺少组件时由应用放入当前用户目录并执行固定大小、SHA256 校验。
-- 可单独下载约 67 MB 的 tiny 模型包；将两个压缩包解压到同一个父目录即可离线携带 tiny 模型。
-- 解压后保留 `AudioSubtitleOverlay` 目录及其中的 `_internal`，直接双击 `AudioSubtitleOverlay.exe` 运行，不要求朋友电脑预装 Python。
+- 支持系统播放回环和麦克风输入。
+- 支持选择音频来源、源语言、目标语言和识别模型。
+- 支持 CPU 运行；首次使用 GPU 时，应用可按需准备额外运行库。
+- 主程序包约 106 MiB，低于 150 MiB；不要求目标电脑预装 Python。
+- 提供独立的 tiny 模型包，便于离线携带默认模型。
 
-发布包位于 [GitHub Releases](https://github.com/Cormor/AudioSubtitleOverlay/releases)，源码、组件清单和构建说明位于当前仓库。
+### 下载与运行
 
-## English introduction
+1. 从 [GitHub Releases](https://github.com/Cormor/AudioSubtitleOverlay/releases) 下载主程序 ZIP。
+2. 解压后保留完整的 `AudioSubtitleOverlay` 文件夹及其中的 `_internal` 文件夹。
+3. 需要离线携带 tiny 模型时，再下载 tiny 模型 ZIP，并解压到与主程序相同的父目录。
+4. 双击 `AudioSubtitleOverlay\AudioSubtitleOverlay.exe`。
 
-AudioSubtitleOverlay is a Windows desktop overlay that captures system playback audio, runs local speech recognition with `faster-whisper`, and displays the source text and translation in a movable, resizable subtitle window.
+主程序没有内置模型。联网时，应用会按需准备模型；使用 tiny 模型包可以在运行前准备默认模型。GPU 运行库仅在选择 GPU 且本机缺少对应组件时按需准备，CPU 模式不需要该运行库。
 
-- The default recognition model is `tiny`; other prepared models can be selected in the settings.
-- The main portable ZIP does not bundle a large speech model or CUDA user-mode libraries. The current slim package is about 111 MB; missing components are prepared in the current user's data directory and verified by fixed size and SHA256 checks.
-- A separate tiny-model ZIP of about 67 MB is available for offline distribution. Extract both ZIP files under the same parent directory to carry the tiny model with the application.
-- Keep the complete `AudioSubtitleOverlay` directory, including `_internal`, after extraction. Double-click `AudioSubtitleOverlay.exe`; Python does not need to be installed on the recipient's computer.
+### 发布文件
 
-Download the packaged builds from [GitHub Releases](https://github.com/Cormor/AudioSubtitleOverlay/releases). The repository also contains the source code, component manifest, and Windows build instructions.
+- `AudioSubtitleOverlay_Portable_20260918.zip`：主程序，约 106 MiB。
+- `AudioSubtitleOverlay_tiny_model_20260918.zip`：可选 tiny 模型包，约 67 MiB。
+- `SHA256SUMS.txt`：发布文件校验值。
+
+## English
+
+AudioSubtitleOverlay is a Windows desktop subtitle overlay. It recognizes system playback or microphone audio locally and displays source text with translation.
+
+- Supports system playback loopback and microphone input.
+- Lets users choose the audio source, languages, and recognition model.
+- Supports CPU mode; GPU mode can prepare additional runtime components when needed.
+- The main portable package is about 106 MiB and does not require Python to be installed on the target computer.
+- An optional tiny-model package is provided for offline distribution.
+
+### Download and run
+
+1. Download the main ZIP from [GitHub Releases](https://github.com/Cormor/AudioSubtitleOverlay/releases).
+2. Extract it and keep the complete `AudioSubtitleOverlay` directory, including `_internal`.
+3. For offline use of the tiny model, extract the tiny-model ZIP under the same parent directory.
+4. Double-click `AudioSubtitleOverlay\AudioSubtitleOverlay.exe`.
+
+The main package does not include a speech model. When network access is available, the application prepares a missing model as needed; the tiny-model package can be prepared in advance. GPU runtime components are prepared only when GPU mode is selected and they are missing.
 
 ## 许可证与商业使用 | License and commercial use
 
-AudioSubtitleOverlay 自有代码采用 `AudioSubtitleOverlay Non-Commercial
-Source-Available License 1.0`，完整条款见 [`LICENSE`](LICENSE)。这是源代码可见
-许可证，不是 OSI 认可的 Open Source License。
+项目自有代码采用 `AudioSubtitleOverlay Non-Commercial Source-Available License 1.0`，完整条款见 [`LICENSE`](LICENSE)。该许可证允许源代码可见，但不是 OSI 认可的 Open Source License。
 
-- 个人、教育、研究、测试、爱好和其他非商业运行默认允许。
-- 修改、集成、重新打包或再分发时，必须公开完整对应源码和修改说明，或者事先取得版权持有者的书面授权。
-- 销售、收费分发、商业集成、企业内部业务使用、收入型服务和其他商业使用必须事先取得单独的商业授权。
-- 商业授权说明见 [`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md)。
-- 第三方库、语音模型和 GPU 运行库不适用本项目自有代码许可证，详见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+- 个人、教育、研究、测试、爱好及其他非商业使用默认允许。
+- 修改、集成、重新打包或再分发，必须公开完整对应源码和修改说明，或事先取得书面授权。
+- 销售、收费分发、商业集成、企业内部业务使用、收入型服务及其他商业使用，必须事先取得商业授权。
+- 第三方库、模型和运行库适用各自的许可条款，见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
-AudioSubtitleOverlay's original code is provided under the
-`AudioSubtitleOverlay Non-Commercial Source-Available License 1.0`; see
-[`LICENSE`](LICENSE) for the complete terms. This is a source-available license,
-not an OSI-approved Open Source License.
+The original code is provided under the `AudioSubtitleOverlay Non-Commercial Source-Available License 1.0`; see [`LICENSE`](LICENSE) for the complete terms. Non-commercial use is allowed by default. Modifications, integration, repackaging, and redistribution require public corresponding source with change notes or prior written authorization. All commercial use requires prior written authorization. Third-party components remain under their own terms.
 
-- Personal, educational, research, testing, hobby, and other non-commercial use is permitted by default.
-- Modifying, integrating, repackaging, or redistributing the software requires either publicly available complete corresponding source code and change notes or prior written authorization.
-- Selling, paid distribution, commercial integration, internal business use, revenue-generating services, and other Commercial Use require separate prior authorization.
-- See [`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md) for commercial licensing.
-- Third-party libraries, models, and GPU runtimes remain under their own terms; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
-
-## 快速开始 | Quick start
-
-1. 下载主程序 ZIP；需要离线携带 `tiny` 模型时，再下载 tiny 模型 ZIP。
-2. 将 ZIP 解压到同一个父目录；不要删除主程序目录中的 `_internal`。
-3. 双击 `AudioSubtitleOverlay.exe`，在界面中选择音频来源、源语言、目标语言和模型。
-4. 首次缺少模型或 GPU 用户态运行库时，应用会按清单下载并校验；没有网络时可使用已准备的本地模型或 tiny 模型包。
-
-1. Download the main application ZIP. Download the tiny-model ZIP as well when offline model distribution is required.
-2. Extract both ZIP files under the same parent directory and keep the complete `_internal` directory.
-3. Double-click `AudioSubtitleOverlay.exe`, then select the audio source, source language, target language, and model.
-4. If a model or GPU user-mode runtime is missing, the application downloads and verifies it according to the manifest. Offline use requires a locally prepared model or the tiny-model package.
-
-## 已实现能力
-
-- 支持 WASAPI Loopback 系统播放回环与麦克风输入；在“音频来源”中选择带“系统播放”或“麦克风”前缀的设备。
-- 通过 `faster-whisper` 在本地执行语音识别。
-- 可切换源语言，也可以让 Whisper 自动检测源语言；中文识别与中文译文统一显示为简体中文。
-- 界面语言优先排序为中文、英语、日语、韩语、法语、西班牙语，其他语言随后列出。
-- 可切换目标语言，并显示源文本和翻译文本；源语言与目标语言相同时隐藏译文段落，自动检测到相同语言时同样隐藏。
-- 翻译后端支持：本地 Argos Translate、免费在线 MyMemory，以及本地优先失败后在线。
-- 提供模型管理窗口，可查看模型说明、远端大小、本地大小、下载状态和下载进度，并支持暂停、继续、断点续传、取消和删除应用管理目录中的模型。
-- 启动识别时自动准备缺失的模型；检测到NVIDIA驱动且配置需要GPU时自动准备CUDA 12用户态运行库。自动模式的GPU准备失败后回退CPU，明确选择GPU时显示失败原因。
-- 组件下载器使用`.part`临时文件、HTTP Range断点续传、SHA256校验、原子安装和压缩包路径安全检查；组件安装到当前用户目录，不修改系统PATH和显卡驱动。
-- 悬浮窗支持拖动位置、拖动右下角调整大小，最小高度可收缩到默认字号的一行字幕。按照当前窗口宽度自动换行、按高度显示完整行；保留已完成内容，仅修订未确认末尾，不显示语言名称前缀。GPU 模式下最新原文和译文固定在窗口底部，上方历史按阅读节奏滚动；跟随模式只有一个固定尾槽，新尾行直接在尾槽显示，离开尾槽的旧行按固定目标立即进入历史，不执行识别更新触发的逐帧动画；超出窗口的历史内容默认每行停留 3 秒后自动移动到下一行，可在外观中调整至 1～8 秒；向上滚动会暂停自动跟随，右键“回到最新字幕”可恢复。识别更新不会直接改动当前滚动偏移。
-- 可分别配置悬浮窗背景不透明度和文字不透明度，范围均为 0～1：0 为完全透明，1 为不透明。原文和译文分别支持文字颜色、描边颜色和字体大小，另可配置背景颜色及窗口置顶。没有译文时只排版原文段落；存在译文时译文始终作为原文下方的独立段落。Windows 使用逐像素 Alpha 合成，文字采用超采样抗锯齿绘制。背景设为 0 时空白区域透出下方内容；拖动可见文字移动窗口，右下角保留缩放标记。
-- 设置保存到当前 Windows 用户的 `%APPDATA%\\AudioSubtitleOverlay\\settings.json`。
-
-## 显示处理边界
-
-`display_module.py` 是独立的显示后处理模块，不导入音频采集、识别流水线或 Tk。识别层只提交原始文字、词级时间和语言；显示模块负责边界空白、换行、中文简体与标点规范化、预览修订、历史段落、翻译乱序暂存和序号过滤，并以不可变快照交给界面。主线程每个定时批次只提交一次悬浮窗快照，悬浮窗自身继续复用排版缓存；因此识别事件数量不会直接决定悬浮窗重绘次数。
-
-## Windows 安装
-
-建议使用 Python 3.11 或 3.12；当前工程也已在 Python 3.14 Windows 环境完成依赖安装和模块验证。语音模型依赖的原生运行时需要与 Python 版本和 CPU/GPU 环境匹配。
-
-```bat
-py -3.11 -m venv .venv
-call .venv\\Scripts\\activate.bat
-python -m pip install --upgrade pip
-python -m pip install -r requirements-windows.txt
-python main.py
-```
-
-默认识别模型为 `tiny`。识别启动时按以下顺序查找模型：设置中填写的本地模型目录、应用用户目录 `%APPDATA%\\AudioSubtitleOverlay\\models\\<模型名>`、打包目录的内置模型目录，以及本机已有的 Hugging Face 快照。未找到时，应用调用内部下载器准备对应模型；`tiny`使用仓库中固定的提交修订和SHA256清单，其他模型根据Hugging Face远端提交修订生成文件清单。
-
-模型管理窗口仍然支持显式查询远端大小和手动下载。下载任务显示当前文件、总进度、本地大小、速度，并支持暂停、继续、取消和断点续传。关闭窗口不会取消后台任务。
-
-组件清单位于 `component_manifest.json`。当前清单包含：
-
-- `tiny`：`Systran/faster-whisper-tiny`固定提交版本；
-- `runtime.cuda12`：CUDA 12对应的cuBLAS、cuDNN和NVRTC Windows wheel。
-
-`tiny`清单优先使用 Hugging Face 固定提交地址；项目公开后，清单中的 `urls` 备用地址指向本仓库的 `assets/tiny`，用于处理部分网络环境无法访问 Hugging Face 的情况。无论使用哪一个地址，应用都会执行相同的文件大小和 SHA256 校验。
-
-模型和组件安装在 `%APPDATA%\\AudioSubtitleOverlay`下。下载失败时保留断点；文件大小或SHA256不匹配时不会安装到最终目录。没有网络且本地没有可用缓存时，应用会显示错误，不会安装未校验的文件。
-
-如果要使用完全离线翻译，可以额外安装：
-
-```bat
-python -m pip install -r requirements-local-translation.txt
-```
-
-之后还需要在 Argos Translate 中安装对应的 `.argosmodel` 语言包。没有安装语言包时，应用会显示明确错误；选择“本地优先，失败转在线”可以在本地语言包缺失时转用 MyMemory。
-
-## 运行和打包
-
-直接运行：
-
-```bat
-python main.py
-```
-
-构建窗口模式的最小主包：
-
-```bat
-build_windows.bat
-```
-
-构建结果位于 `dist_minimal\\AudioSubtitleOverlay\\AudioSubtitleOverlay.exe`。构建输出为 onedir 目录，必须整体保留，其中包含Python、Tk、CTranslate2、CPU运行库、VAD运行库和组件清单；模型和CUDA用户态运行库由内部下载器准备，不能只复制EXE文件。
-
-构建脚本不会把 `models` 和 `.venv\\Lib\\site-packages\\nvidia`复制到主包。主包仍然包含完成CPU识别所需的原生运行库，因此可以在没有系统Python的Windows环境中直接启动。首次识别若缺少模型，需要网络或已有用户缓存。
-
-构建后可运行以下命令生成压缩包：
-
-```bat
-package_windows.bat
-```
-
-脚本会把 `dist_minimal\\AudioSubtitleOverlay` 整体压缩，并在压缩包内写入 `使用说明.txt`。转发时不要删除 `_internal`，也不要把模型目录或GPU wheel直接复制进主包。
-
-同一脚本还会生成独立的 `AudioSubtitleOverlay_tiny模型_YYYYMMDD.zip`。需要离线携带模型时，把两个压缩包解压到同一个父目录，tiny模型会合并到 `AudioSubtitleOverlay\\models\\tiny`；不提供独立模型包时，主程序会按组件清单自动下载 tiny。
-
-运行时组件下载不是Python `pip install`，不会依赖朋友电脑预装Python。GPU wheel下载后由内部下载器校验并解压到用户目录，再由当前进程加入DLL搜索路径。
-
-精简版主包不包含模型和NVIDIA用户态运行库；当前构建产物的主要体积来自应用自身的Python、Tk、CTranslate2、VAD和翻译依赖。首次使用GPU时，运行库会在用户目录单独下载和解压，因此不计入主压缩包体积。
-
-构建脚本开始时只强制停止名为 `AudioSubtitleOverlay.exe` 的本应用，避免运行中的应用锁定 DLL；不会停止其他 Python 进程或无关应用。
-
-## 采集设备说明
-
-应用启动后点击“刷新设备”。设备来源使用只读下拉框，不能输入未枚举的设备名称；界面同时显示 Windows 当前默认播放端点和实际选择的采集端点。设备列表区分系统播放回环和实体麦克风，旧配置中的设备裸名称仍按播放回环解析。麦克风使用所选录音设备，系统播放使用对应回环设备；两者均按设备原生通道采集后转为模型需要的 16 kHz 单声道。WSL 内的代码检查不能替代 Windows WASAPI 实机验证。
-
-识别使用两级重叠音频窗口。GPU 模式下，即时通道每 0.1 秒检查最近约 1 秒音频，使用单束搜索和无 VAD 的短窗口结果显示当前草稿；质量通道每 0.5 秒处理最长约 8 秒上下文，使用词级时间戳和 VAD 修订草稿、保留模型标点，并按句末或明显停顿分段。模型未返回中文标点时，约 0.55 秒以上的词间停顿形成新字幕段；约 0.7 秒及以上的停顿补入句号，较短停顿补入逗号，语音结束后的静音窗口补入末尾句号。中文结果中的 ASCII 逗号、句号、问号、感叹号、冒号和分号会转换为全角标点。即时草稿不触发翻译，质量结果到达后覆盖同一段草稿；相同草稿不会重复投递到界面。CPU 模式不启动即时通道，继续使用 0.5 秒质量更新周期以避免识别线程积压。GPU 实测验证中首个即时草稿在音频输入开始后约 0.35 秒返回；即时通道只跳过全静音短窗口，不会因音量低而停止会话；实际出字时间仍取决于语音内容、模型、计算设备和音频采集状态。
-
-即时预览采用打字机式显示：质量通道确认的正文作为稳定前缀，连续预览只允许最后 12 个字符修订；更早位置出现冲突时暂时保持当前显示，等待质量结果覆盖。显示模块先合并一个定时批次内的识别、预览和翻译事件，再交付完整快照；渲染层把当前尾槽和历史滚动使用独立状态管理，排版结果按文本、窗口、字号和跟随状态缓存，滚动位置在目标变化时立即同步，不执行逐帧过渡。
-
-应用不修改系统 PATH 或显卡驱动。需要GPU时，应用先将 CUDA 12 的 cuBLAS、cuDNN 9 与 NVRTC 用户态运行库准备到用户目录，再只为当前进程设置 DLL 搜索路径。GPU 初始化在开始采集前执行。首次使用 GPU 的准备时间可能长于后续推理。显卡与驱动仍需支持对应运行库。
-
-正常状态栏只显示识别状态或需要处理的错误。推理耗时、窗口区间和详细异常写入 `%APPDATA%\AudioSubtitleOverlay\logs\app.log`，日志按大小轮转。日志不写入识别正文。设备或识别错误不会自行结束会话，可以停止后调整配置再重试。
-
-## 翻译数据范围
-
-MyMemory 公共接口存在单次文本长度和服务频率限制。选择在线后端时，识别文本会通过 HTTPS 发送到该公共接口；不希望发送音频识别结果时，应使用本地 Argos Translate，并提前安装所需语言包。
+商业授权说明见 [`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md)。
