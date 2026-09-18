@@ -1,0 +1,92 @@
+name: 发布 Windows 版本
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: 构建并发布 Windows 便携版
+    if: github.event.head_commit.message == '发布 v1.0.0'
+    runs-on: windows-latest
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 准备 Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 构建 Windows 主程序
+        shell: cmd
+        run: call build_windows.bat
+
+      - name: 创建发布压缩包
+        shell: cmd
+        run: call package_windows.bat
+
+      - name: 校验并准备 Release 资产
+        shell: pwsh
+        env:
+          RELEASE_TAG: v1.0.0
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $mainSource = Get-ChildItem "releases\AudioSubtitleOverlay_精简版_*.zip" | Select-Object -First 1
+          if ($null -eq $mainSource) {
+            throw "未找到主程序压缩包。"
+          }
+
+          $tinySource = Get-Item "releases\AudioSubtitleOverlay_tiny模型_20260918.zip"
+          $assetDirectory = "release-assets"
+          New-Item -ItemType Directory -Force -Path $assetDirectory | Out-Null
+
+          $mainAsset = Join-Path $assetDirectory "AudioSubtitleOverlay_精简版_20260918.zip"
+          $tinyAsset = Join-Path $assetDirectory "AudioSubtitleOverlay_tiny模型_20260918.zip"
+          Copy-Item $mainSource.FullName $mainAsset -Force
+          Copy-Item $tinySource.FullName $tinyAsset -Force
+
+          python -c 'from zipfile import ZipFile; paths=[r"release-assets\AudioSubtitleOverlay_精简版_20260918.zip", r"release-assets\AudioSubtitleOverlay_tiny模型_20260918.zip"]; assert all(ZipFile(path).testzip() is None for path in paths)'
+
+          $mainInfo = Get-Item $mainAsset
+          $tinyInfo = Get-Item $tinyAsset
+          if ($mainInfo.Length -gt 150000000) {
+            throw "主程序压缩包超过 150,000,000 字节，停止发布。"
+          }
+          $mainSize = "{0:N0} bytes" -f $mainInfo.Length
+          $tinySize = "{0:N0} bytes" -f $tinyInfo.Length
+          $mainHash = (Get-FileHash -Algorithm SHA256 $mainAsset).Hash.ToLowerInvariant()
+          $tinyHash = (Get-FileHash -Algorithm SHA256 $tinyAsset).Hash.ToLowerInvariant()
+
+          $notes = Get-Content "docs\release-notes-template.md" -Raw
+          $notes = $notes.Replace("{{VERSION}}", $env:RELEASE_TAG)
+          $notes = $notes.Replace("{{MAIN_SIZE}}", $mainSize)
+          $notes = $notes.Replace("{{TINY_SIZE}}", $tinySize)
+          $notes = $notes.Replace("{{MAIN_SHA256}}", $mainHash)
+          $notes = $notes.Replace("{{TINY_SHA256}}", $tinyHash)
+          Set-Content "release-assets\RELEASE_NOTES.md" -Value $notes -Encoding utf8
+
+          @"
+          $mainHash  AudioSubtitleOverlay_精简版_20260918.zip
+          $tinyHash  AudioSubtitleOverlay_tiny模型_20260918.zip
+          "@ | Set-Content "release-assets\SHA256SUMS.txt" -Encoding ascii
+
+      - name: 创建 GitHub Release 并上传资产
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v1.0.0
+        run: >-
+          gh release create $env:RELEASE_TAG
+          release-assets/AudioSubtitleOverlay_精简版_20260918.zip
+          release-assets/AudioSubtitleOverlay_tiny模型_20260918.zip
+          release-assets/SHA256SUMS.txt
+          --repo $env:GITHUB_REPOSITORY
+          --title "AudioSubtitleOverlay $env:RELEASE_TAG"
+          --notes-file release-assets/RELEASE_NOTES.md
+          --target $env:GITHUB_SHA
