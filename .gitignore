@@ -1,0 +1,63 @@
+# Python运行目录
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# PyInstaller和本地构建输出
+build*/
+dist*/
+*.spec.bak
+
+# 本地模型、GPU wheel和发布压缩包
+models/*
+gpu_wheels/
+releases/
+AudioSubtitleOverlay_便携版_*
+AudioSubtitleOverlay_精简GPU_*
+
+# 本地验证产物
+verification_*
+observation_*
+cli_probe_*
+video_evidence_*
+final_*.png
+final_*.json
+final_*.txt
+capture_*.png
+overlay_*.png
+*.wav
+*.jpg
+*.jpeg
+*.log
+*.pid
+*.bak
+backups/
+
+# 历史调试脚本，不属于公开应用入口
+analyze_*.py
+capture_shipped_window.py
+debug_*.py
+env_probe.py
+freeze_*.py
+observe_*.py
+overlay_footer_model_backup_*.py
+prepare_model.py
+probe_*.py
+summarize_*.py
+verify_*.py
+download_gpu_wheels.py
+
+# 本机运行状态和临时文件
+.audio-subtitle-overlay-component.json
+.audio-subtitle-overlay-model.json
+*.part
+*.installing-*
+*.backup-*
+
+# 凭据和本地配置
+.env
+.env.*
+*.pem
+*.p12
