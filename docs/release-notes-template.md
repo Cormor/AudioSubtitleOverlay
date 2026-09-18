@@ -11,14 +11,14 @@ AudioSubtitleOverlay is a Windows desktop overlay for local speech recognition a
 3. 需要离线携带 tiny 模型时，将 `AudioSubtitleOverlay_tiny_model_20260918.zip` 解压到同一父目录。
 4. 双击 `AudioSubtitleOverlay\AudioSubtitleOverlay.exe`。
 
-主程序包约 {{MAIN_SIZE}}，不要求目标电脑预装 Python。主程序不内置模型；联网时应用会按需准备模型，也可以使用 tiny 模型包预先准备默认模型。GPU 模式首次使用时可能需要额外准备运行库，CPU 模式不需要该运行库。
+主程序包约 106 MiB，不要求目标电脑预装 Python。主程序不内置模型；联网时应用会按需准备模型，也可以使用 tiny 模型包预先准备默认模型。GPU 模式首次使用时可能需要额外准备运行库，CPU 模式不需要该运行库。
 
-The main package is about {{MAIN_SIZE}} and does not require Python on the target computer. It does not include a speech model; the application can prepare a missing model when network access is available, or the optional tiny-model package can be used for offline distribution. GPU mode may prepare additional runtime components on first use.
+The main package is about 106 MiB and does not require Python on the target computer. It does not include a speech model; the application can prepare a missing model when network access is available, or the optional tiny-model package can be used for offline distribution. GPU mode may prepare additional runtime components on first use.
 
 ## 发布文件 | Assets
 
-- `AudioSubtitleOverlay_Portable_20260918.zip`：主程序，约 {{MAIN_SIZE}}。
-- `AudioSubtitleOverlay_tiny_model_20260918.zip`：可选 tiny 模型包，约 {{TINY_SIZE}}。
+- `AudioSubtitleOverlay_Portable_20260918.zip`：主程序，约 106 MiB。
+- `AudioSubtitleOverlay_tiny_model_20260918.zip`：可选 tiny 模型包，约 67 MiB。
 - `SHA256SUMS.txt`：发布文件校验值。
 
 [项目主页与源码](https://github.com/Cormor/AudioSubtitleOverlay) · [截图](https://raw.githubusercontent.com/Cormor/AudioSubtitleOverlay/main/docs/screenshots/main-window.png)
