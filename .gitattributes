@@ -1,0 +1,8 @@
+# 文本文件统一使用 LF；Windows 批处理文件检出时使用 CRLF。
+* text=auto
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf

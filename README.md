@@ -28,6 +28,29 @@ AudioSubtitleOverlay is a Windows desktop overlay that captures system playback 
 
 Download the packaged builds from [GitHub Releases](https://github.com/Cormor/AudioSubtitleOverlay/releases). The repository also contains the source code, component manifest, and Windows build instructions.
 
+## 许可证与商业使用 | License and commercial use
+
+AudioSubtitleOverlay 自有代码采用 `AudioSubtitleOverlay Non-Commercial
+Source-Available License 1.0`，完整条款见 [`LICENSE`](LICENSE)。这是源代码可见
+许可证，不是 OSI 认可的 Open Source License。
+
+- 个人、教育、研究、测试、爱好和其他非商业运行默认允许。
+- 修改、集成、重新打包或再分发时，必须公开完整对应源码和修改说明，或者事先取得版权持有者的书面授权。
+- 销售、收费分发、商业集成、企业内部业务使用、收入型服务和其他商业使用必须事先取得单独的商业授权。
+- 商业授权说明见 [`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md)。
+- 第三方库、语音模型和 GPU 运行库不适用本项目自有代码许可证，详见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+
+AudioSubtitleOverlay's original code is provided under the
+`AudioSubtitleOverlay Non-Commercial Source-Available License 1.0`; see
+[`LICENSE`](LICENSE) for the complete terms. This is a source-available license,
+not an OSI-approved Open Source License.
+
+- Personal, educational, research, testing, hobby, and other non-commercial use is permitted by default.
+- Modifying, integrating, repackaging, or redistributing the software requires either publicly available complete corresponding source code and change notes or prior written authorization.
+- Selling, paid distribution, commercial integration, internal business use, revenue-generating services, and other Commercial Use require separate prior authorization.
+- See [`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md) for commercial licensing.
+- Third-party libraries, models, and GPU runtimes remain under their own terms; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
 ## 快速开始 | Quick start
 
 1. 下载主程序 ZIP；需要离线携带 `tiny` 模型时，再下载 tiny 模型 ZIP。

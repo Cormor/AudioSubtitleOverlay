@@ -14,6 +14,11 @@ dist*/
 models/*
 gpu_wheels/
 releases/
+*.zip
+*.7z
+*.rar
+*.whl
+*.exe
 AudioSubtitleOverlay_便携版_*
 AudioSubtitleOverlay_精简GPU_*
 
@@ -52,6 +57,13 @@ download_gpu_wheels.py
 # 本机运行状态和临时文件
 .audio-subtitle-overlay-component.json
 .audio-subtitle-overlay-model.json
+*.db
+*.sqlite
+*.sqlite3
+*.local.json
+settings.local.json
+appdata/
+logs/
 *.part
 *.installing-*
 *.backup-*
@@ -61,3 +73,14 @@ download_gpu_wheels.py
 .env.*
 *.pem
 *.p12
+*.key
+*.key.pub
+*.secret
+*.secrets
+*.token
+*.credentials
+id_rsa*
+id_ed25519*
+known_hosts
+credentials.json
+secrets.json

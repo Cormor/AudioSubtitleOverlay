@@ -1,16 +1,90 @@
-MIT License
+AudioSubtitleOverlay Non-Commercial Source-Available License 1.0
 
 Copyright (c) 2026 Cormor
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This is a source-available license for the original code of AudioSubtitleOverlay.
+It is not an OSI-approved Open Source license.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Definitions
+
+"Software" means the original source code and documentation in this repository
+that are copyrightable by the Copyright Holder, excluding third-party components
+identified in THIRD_PARTY_NOTICES.md and their own licenses.
+
+"Copyright Holder" means Cormor and any other person who has been identified as
+a copyright holder for a particular contribution.
+
+"Commercial Use" means use primarily intended for or directed toward commercial
+advantage or monetary compensation. Commercial Use includes selling or licensing
+the Software, bundling it with a paid product or service, using it in paid work
+or client delivery, using it in a revenue-generating service, or using it for
+the internal operations of a business.
+
+"Distribute" means making the Software or a work based on it available to any
+other person, including by publishing, sharing, bundling, packaging, or making
+it available for download.
+
+"Complete Corresponding Source" means the preferred form for making changes to
+the distributed work, including all source code, build scripts, packaging files,
+and modifications needed to reproduce the distributed work, excluding operating
+system components and third-party components that are separately licensed.
+
+2. Non-commercial copyright license
+
+Subject to the conditions in this license, the Copyright Holder grants you a
+worldwide, non-exclusive, royalty-free license to use, reproduce, and modify the
+Software for non-commercial purposes.
+
+You may run an unmodified copy of the Software for personal, educational,
+research, testing, hobby, or other non-commercial purposes without publishing
+your own files or source code.
+
+3. Conditions for modified works and distribution
+
+You may not Distribute the Software, a modified version, or a work based on the
+Software unless you do one of the following before or at the time of distribution:
+
+  a. Make the Complete Corresponding Source publicly available at no charge,
+     together with this license and a clear description of the changes; or
+
+  b. Obtain prior written authorization from the Copyright Holder.
+
+Any non-commercial distribution under option 3(a) must preserve this license,
+the copyright notices, and the source availability condition. Modified versions
+must be clearly marked as modified and must not be presented as an official
+release of AudioSubtitleOverlay.
+
+4. Commercial authorization
+
+This license grants no permission for Commercial Use. Commercial Use requires a
+separate prior written authorization or commercial license from the Copyright
+Holder. Such authorization may permit closed-source use, modification,
+distribution, sublicensing, or other terms expressly stated in that authorization.
+
+Publishing source code does not by itself grant permission for Commercial Use.
+
+5. Notices and names
+
+You must retain this license and all copyright notices in every copy or
+substantial portion of the Software that you Distribute. You may not use the
+name AudioSubtitleOverlay, the name Cormor, or associated logos to imply
+endorsement or official status without prior written authorization, except for
+accurate factual attribution.
+
+6. Third-party components
+
+This license does not replace or modify the licenses of third-party libraries,
+models, runtime packages, or other materials listed in
+THIRD_PARTY_NOTICES.md. Those components remain subject to their own licenses
+and notices.
+
+7. Termination
+
+Your rights under this license terminate automatically if you violate its terms.
+They may be restored only with the Copyright Holder's written authorization or
+under the terms of a later compliant release.
+
+8. No warranty
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
