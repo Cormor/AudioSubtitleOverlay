@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 from pathlib import Path
+import sys
 import zipfile
 
 
@@ -54,6 +55,8 @@ def build_archive(source: Path, output: Path) -> None:
 
 def main() -> int:
     """解析命令行并创建压缩包。"""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="创建AudioSubtitleOverlay精简版Windows压缩包")
     parser.add_argument("--source", type=Path, default=Path("dist_minimal/AudioSubtitleOverlay"))
     parser.add_argument("--output", type=Path)

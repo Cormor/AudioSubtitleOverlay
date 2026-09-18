@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 import zipfile
 
 
@@ -44,6 +45,8 @@ def build_archive(source: Path, output: Path) -> None:
 
 def main() -> int:
     """解析命令行并创建tiny模型压缩包。"""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="创建tiny模型离线文件包")
     parser.add_argument("--source", type=Path, default=Path("assets/tiny"))
     parser.add_argument("--output", type=Path, default=Path("releases/AudioSubtitleOverlay_tiny模型_20260918.zip"))

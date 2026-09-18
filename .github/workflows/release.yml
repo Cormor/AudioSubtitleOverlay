@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-and-release:
     name: 构建并发布 Windows 便携版
-    if: github.event.head_commit.message == '发布 v1.0.0'
+    if: startsWith(github.event.head_commit.message, '发布 v1.0.0')
     runs-on: windows-latest
     steps:
       - name: 检出源码
