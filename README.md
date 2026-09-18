@@ -12,7 +12,6 @@ AudioSubtitleOverlay 是一个 Windows 桌面应用：采集当前扬声器正�
 - 主程序压缩包不内置大模型和 CUDA 用户态运行库，当前精简包约 111 MB；缺少组件时由应用放入当前用户目录并执行固定大小、SHA256 校验。
 - 可单独下载约 67 MB 的 tiny 模型包；将两个压缩包解压到同一个父目录即可离线携带 tiny 模型。
 - 解压后保留 `AudioSubtitleOverlay` 目录及其中的 `_internal`，直接双击 `AudioSubtitleOverlay.exe` 运行，不要求朋友电脑预装 Python。
-- 识别文本会过滤 `字幕by昵称` 及常见大小写、空格和分隔符变体，不把该署名送入翻译或字幕历史。
 
 发布包位于 [GitHub Releases](https://github.com/Cormor/AudioSubtitleOverlay/releases)，源码、组件清单和构建说明位于当前仓库。
 
@@ -24,7 +23,6 @@ AudioSubtitleOverlay is a Windows desktop overlay that captures system playback 
 - The main portable ZIP does not bundle a large speech model or CUDA user-mode libraries. The current slim package is about 111 MB; missing components are prepared in the current user's data directory and verified by fixed size and SHA256 checks.
 - A separate tiny-model ZIP of about 67 MB is available for offline distribution. Extract both ZIP files under the same parent directory to carry the tiny model with the application.
 - Keep the complete `AudioSubtitleOverlay` directory, including `_internal`, after extraction. Double-click `AudioSubtitleOverlay.exe`; Python does not need to be installed on the recipient's computer.
-- Branding lines such as `字幕by昵称`, including common case, whitespace, and separator variants, are removed before translation and subtitle history storage.
 
 Download the packaged builds from [GitHub Releases](https://github.com/Cormor/AudioSubtitleOverlay/releases). The repository also contains the source code, component manifest, and Windows build instructions.
 
@@ -74,7 +72,6 @@ not an OSI-approved Open Source License.
 - 提供模型管理窗口，可查看模型说明、远端大小、本地大小、下载状态和下载进度，并支持暂停、继续、断点续传、取消和删除应用管理目录中的模型。
 - 启动识别时自动准备缺失的模型；检测到NVIDIA驱动且配置需要GPU时自动准备CUDA 12用户态运行库。自动模式的GPU准备失败后回退CPU，明确选择GPU时显示失败原因。
 - 组件下载器使用`.part`临时文件、HTTP Range断点续传、SHA256校验、原子安装和压缩包路径安全检查；组件安装到当前用户目录，不修改系统PATH和显卡驱动。
-- 识别文字会过滤“字幕by昵称”及常见大小写、空格和分隔符变体，不把该署名送入翻译或字幕历史。
 - 悬浮窗支持拖动位置、拖动右下角调整大小，最小高度可收缩到默认字号的一行字幕。按照当前窗口宽度自动换行、按高度显示完整行；保留已完成内容，仅修订未确认末尾，不显示语言名称前缀。GPU 模式下最新原文和译文固定在窗口底部，上方历史按阅读节奏滚动；跟随模式只有一个固定尾槽，新尾行直接在尾槽显示，离开尾槽的旧行按固定目标立即进入历史，不执行识别更新触发的逐帧动画；超出窗口的历史内容默认每行停留 3 秒后自动移动到下一行，可在外观中调整至 1～8 秒；向上滚动会暂停自动跟随，右键“回到最新字幕”可恢复。识别更新不会直接改动当前滚动偏移。
 - 可分别配置悬浮窗背景不透明度和文字不透明度，范围均为 0～1：0 为完全透明，1 为不透明。原文和译文分别支持文字颜色、描边颜色和字体大小，另可配置背景颜色及窗口置顶。没有译文时只排版原文段落；存在译文时译文始终作为原文下方的独立段落。Windows 使用逐像素 Alpha 合成，文字采用超采样抗锯齿绘制。背景设为 0 时空白区域透出下方内容；拖动可见文字移动窗口，右下角保留缩放标记。
 - 设置保存到当前 Windows 用户的 `%APPDATA%\\AudioSubtitleOverlay\\settings.json`。

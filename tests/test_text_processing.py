@@ -1,4 +1,4 @@
-"""字幕署名过滤测试。"""
+"""字幕文字后处理测试。"""
 
 from __future__ import annotations
 

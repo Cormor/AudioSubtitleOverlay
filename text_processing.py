@@ -16,7 +16,7 @@ _CHINESE_PUNCTUATION = str.maketrans(
 )
 
 
-# 过滤识别模型偶尔生成的字幕署名，不把署名送入翻译或保留到历史记录。
+# 内部文本净化：在翻译和历史记录前移除不需要的附加文本。
 _SUBTITLE_CREDIT = re.compile(
     r"字幕\s*(?:[:：]\s*)?by\s*[@#\w](?:[\w.-]*)",
     re.IGNORECASE,
