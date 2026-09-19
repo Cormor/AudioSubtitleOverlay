@@ -49,8 +49,13 @@ class Application:
         self._drain_after_id = None
 
         self.root.title("系统音频识别与翻译悬浮窗")
-        self.root.geometry("880x880")
-        self.root.minsize(800, 820)
+        # 首次打开尽量多展示内容；屏幕较小时由滚动区域承载剩余内容。
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        initial_width = max(760, min(960, screen_width - 80))
+        initial_height = max(640, min(960, screen_height - 100))
+        self.root.geometry(f"{initial_width}x{initial_height}")
+        self.root.minsize(760, 600)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self._create_variables()
         self._build_ui()
@@ -97,8 +102,32 @@ class Application:
         except tk.TclError:
             pass
 
-        container = ttk.Frame(self.root, padding=16)
-        container.pack(fill="both", expand=True)
+        outer = ttk.Frame(self.root, padding=16)
+        outer.pack(fill="both", expand=True)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=1)
+
+        self._scroll_canvas = tk.Canvas(outer, highlightthickness=0, borderwidth=0)
+        self._scroll_canvas.grid(row=0, column=0, sticky="nsew")
+        self._scrollbar = ttk.Scrollbar(
+            outer,
+            orient="vertical",
+            command=self._scroll_canvas.yview,
+        )
+        self._scrollbar.grid(row=0, column=1, sticky="ns")
+        self._scroll_canvas.configure(yscrollcommand=self._scrollbar.set)
+
+        container = ttk.Frame(self._scroll_canvas)
+        self._scroll_window = self._scroll_canvas.create_window(
+            (0, 0),
+            window=container,
+            anchor="nw",
+        )
+        container.bind("<Configure>", self._update_scroll_region)
+        self._scroll_canvas.bind("<Configure>", self._resize_scroll_content)
+        self.root.bind_all("<MouseWheel>", self._on_settings_mousewheel, add="+")
+        self.root.bind_all("<Button-4>", self._on_settings_scroll_button, add="+")
+        self.root.bind_all("<Button-5>", self._on_settings_scroll_button, add="+")
 
         title = ttk.Label(
             container,
@@ -246,6 +275,41 @@ class Application:
             self.translation_var,
         ):
             variable.trace_add("write", self._queue_live_configuration)
+
+    def _update_scroll_region(self, _event=None) -> None:
+        """根据内容高度更新主窗口的可滚动范围。"""
+        self._scroll_canvas.configure(scrollregion=self._scroll_canvas.bbox("all"))
+
+    def _resize_scroll_content(self, event) -> None:
+        """让内容宽度跟随窗口，避免出现不必要的横向滚动。"""
+        self._scroll_canvas.itemconfigure(self._scroll_window, width=event.width)
+
+    def _in_scroll_content(self, widget) -> bool:
+        """判断鼠标事件是否来自主窗口的可滚动内容。"""
+        current = widget
+        while current is not None:
+            if current is self._scroll_canvas:
+                return True
+            current = getattr(current, "master", None)
+        return False
+
+    def _on_settings_mousewheel(self, event):
+        """在主窗口内容区域响应鼠标滚轮。"""
+        if not self._in_scroll_content(event.widget):
+            return
+        # 下拉框、输入框和滑块保留控件自身的滚轮行为。
+        if event.widget.winfo_class() in {"TCombobox", "TSpinbox", "Entry", "TScale"}:
+            return
+        delta = int(event.delta / 120)
+        self._scroll_canvas.yview_scroll(-delta if delta else (-1 if event.delta < 0 else 1), "units")
+        return "break"
+
+    def _on_settings_scroll_button(self, event):
+        """兼容使用 Button-4/Button-5 发送滚轮事件的环境。"""
+        if not self._in_scroll_content(event.widget):
+            return
+        self._scroll_canvas.yview_scroll(-1 if event.num == 4 else 1, "units")
+        return "break"
 
     def _build_overlay_controls(self, parent) -> None:
         ttk.Button(parent, text="选择背景颜色", command=self._choose_background).grid(
