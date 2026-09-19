@@ -7,7 +7,7 @@ import queue
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 import numpy as np
@@ -22,7 +22,7 @@ from text_processing import remove_subtitle_credit
 
 @dataclass(frozen=True)
 class PipelineOptions:
-    """一次会话的固定配置。"""
+    """一组识别配置。"""
 
     source_language: str | None
     target_language: str
@@ -52,21 +52,25 @@ class LivePipeline:
         on_stopped: Callable[[], None],
         on_preview: Callable[[int, str, str | None, int], None] | None = None,
         on_update: Callable[[SourceUpdate], None] | None = None,
+        on_reset: Callable[[], None] | None = None,
     ) -> None:
         self.options = options
         self._on_status = on_status
         self._on_source = on_source
         self._on_update = on_update
+        self._on_reset = on_reset
         self._on_translation = on_translation
         self._on_error = on_error
         self._on_stopped = on_stopped
         self._queue: queue.Queue[tuple[np.ndarray | None, Exception | None, float]] = queue.Queue()
+        self._configuration_queue: queue.Queue[PipelineOptions] = queue.Queue()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._capture: SystemAudioCapture | None = None
         self._lock = threading.Lock()
         self._stopped_callback_lock = threading.Lock()
         self._stopped_callback_sent = False
+        self._configuration_generation = 0
         self._source_language = options.source_language
         self._target_language = options.target_language
         self._translation_sequence = 0
@@ -99,43 +103,160 @@ class LivePipeline:
         self._notify_stopped()
 
     def set_languages(self, source_language: str | None, target_language: str) -> None:
-        """更新后续音频窗口使用的源语言和目标语言。"""
+        """兼容旧调用方，更新后续音频使用的语言。"""
         with self._lock:
-            self._source_language = source_language
-            self._target_language = target_language
+            options = replace(
+                self.options,
+                source_language=source_language,
+                target_language=target_language,
+            )
+        self.update_options(options)
+
+    def update_options(self, options: PipelineOptions) -> bool:
+        """在运行中提交新配置，后台线程会合并并应用最新的一组设置。"""
+        with self._lock:
+            if options == self.options:
+                return False
+            self.options = options
+            self._source_language = options.source_language
+            self._target_language = options.target_language
+            self._configuration_generation += 1
+            self._pending_translations.clear()
+        self._configuration_queue.put(options)
+        return True
+
+    def _get_configuration(self) -> tuple[PipelineOptions, int]:
+        """取得配置快照和版本号，保证一次识别使用同一组设置。"""
+        with self._lock:
+            return self.options, self._configuration_generation
+
+    def _is_configuration_current(self, generation: int) -> bool:
+        with self._lock:
+            return generation == self._configuration_generation
+
+    def _take_latest_configuration(self) -> PipelineOptions | None:
+        """合并短时间内连续修改的设置，只应用最后一组。"""
+        try:
+            latest = self._configuration_queue.get_nowait()
+        except queue.Empty:
+            return None
+        while True:
+            try:
+                latest = self._configuration_queue.get_nowait()
+            except queue.Empty:
+                return latest
+
+    def _clear_audio_queue(self) -> None:
+        """丢弃切换前已经排队的旧音频，避免新旧来源混在一起。"""
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                return
 
     def _run(self) -> None:
+        capture: SystemAudioCapture | None = None
+        recognizer: WhisperRecognizer | None = None
+        active_options: PipelineOptions | None = None
+        active_generation = -1
+        failed_generation = -1
+        buffer = np.empty(0, dtype=np.float32)
+        buffer_start = 0
+        received_samples = 0
+        quality_decoded_until = 0
+        transcript = RollingTranscript()
+        last_audio_status_at = time.monotonic()
         try:
-            self._on_status("正在准备识别……")
-            recognizer = WhisperRecognizer(
-                self.options.model_size,
-                self.options.device_mode,
-                self.options.model_path,
-                on_status=self._on_status,
-            )
-            recognizer.load()
-            if self._stop_event.is_set():
-                return
-            gpu_enabled = recognizer.actual_device == "cuda"
-            quality_update_samples = (
-                self.gpu_quality_update_samples
-                if gpu_enabled
-                else self.cpu_quality_update_samples
-            )
-            self._on_status("正在连接音频设备……")
-            self._capture = SystemAudioCapture(self.options.audio_device)
-            self._capture.start(
-                self._on_audio, self._on_capture_error,
-                on_ready=lambda name: self._on_status(f"正在识别；已打开采集设备：{name}"),
-            )
-
-            buffer = np.empty(0, dtype=np.float32)
-            buffer_start = 0
-            received_samples = 0
-            quality_decoded_until = 0
-            transcript = RollingTranscript()
-            last_audio_status_at = time.monotonic()
             while not self._stop_event.is_set():
+                requested = self._take_latest_configuration()
+                options, generation = self._get_configuration()
+                configuration_changed = requested is not None or generation != active_generation
+                model_changed = (
+                    active_options is None
+                    or active_options.model_size != options.model_size
+                    or active_options.device_mode != options.device_mode
+                    or active_options.model_path != options.model_path
+                )
+                audio_changed = (
+                    active_options is None
+                    or active_options.audio_device != options.audio_device
+                )
+
+                if recognizer is None or configuration_changed:
+                    # 当前配置加载失败时保持等待，直到用户再次修改配置，不重复下载同一组件。
+                    if recognizer is None and failed_generation == generation:
+                        time.sleep(0.1)
+                        continue
+
+                    if active_options is not None and configuration_changed:
+                        if capture is not None and (model_changed or audio_changed):
+                            capture.stop(wait=True)
+                            capture = None
+                            self._capture = None
+                        self._clear_audio_queue()
+                        buffer = np.empty(0, dtype=np.float32)
+                        buffer_start = 0
+                        received_samples = 0
+                        quality_decoded_until = 0
+                        transcript = RollingTranscript()
+                        last_audio_status_at = time.monotonic()
+                        if self._on_reset:
+                            self._on_reset()
+
+                    if recognizer is None or model_changed:
+                        if capture is not None:
+                            capture.stop(wait=True)
+                            capture = None
+                            self._capture = None
+                        self._on_status(
+                            "正在准备识别……"
+                            if active_options is None
+                            else "正在应用新的识别设置……"
+                        )
+                        # 新模型开始加载后不再继续使用旧识别器；失败时等待配置变化，避免重复加载。
+                        recognizer = None
+                        candidate = WhisperRecognizer(
+                            options.model_size,
+                            options.device_mode,
+                            options.model_path,
+                            on_status=self._on_status,
+                        )
+                        try:
+                            candidate.load()
+                        except Exception as error:
+                            failed_generation = generation
+                            logging.exception("识别设置加载失败")
+                            if not self._stop_event.is_set():
+                                self._on_error(f"新的识别设置无法使用：{error}")
+                            continue
+                        if self._stop_event.is_set():
+                            break
+                        if not self._is_configuration_current(generation):
+                            continue
+                        recognizer = candidate
+                        failed_generation = -1
+
+                    active_options = options
+                    active_generation = generation
+                    quality_update_samples = (
+                        self.gpu_quality_update_samples
+                        if recognizer.actual_device == "cuda"
+                        else self.cpu_quality_update_samples
+                    )
+                    last_audio_status_at = time.monotonic()
+                    if capture is None:
+                        self._on_status("正在连接音频设备……")
+                        capture = SystemAudioCapture(options.audio_device)
+                        self._capture = capture
+                        capture.start(
+                            self._on_audio,
+                            self._on_capture_error,
+                            on_ready=lambda name: self._on_status(
+                                f"正在识别；已打开采集设备：{name}"
+                            ),
+                        )
+                    continue
+
                 try:
                     frames, error, received_at = self._queue.get(timeout=0.2)
                 except queue.Empty:
@@ -143,6 +264,9 @@ class LivePipeline:
                     if received_samples == 0 and now - last_audio_status_at >= 3:
                         self._on_status("尚未收到输入音频")
                         last_audio_status_at = now
+                    continue
+                # 配置在取到音频后发生变化时，先丢弃这一块，下一轮应用新设置。
+                if not self._is_configuration_current(active_generation):
                     continue
                 if error:
                     logging.error("系统音频采集失败：%s", error)
@@ -175,7 +299,11 @@ class LivePipeline:
                 if not new_samples:
                     continue
 
-                source_language, target_language = self._get_languages()
+                options, generation = self._get_configuration()
+                if generation != active_generation:
+                    continue
+                source_language = options.source_language
+                target_language = options.target_language
                 if received_samples - quality_decoded_until < quality_update_samples:
                     continue
                 desired_start = max(0, received_samples - self.window_samples)
@@ -191,10 +319,14 @@ class LivePipeline:
                 except Exception:
                     logging.exception("滚动窗口识别失败，设备=%s", recognizer.actual_device)
                     if not self._stop_event.is_set():
-                        self._on_error("GPU 识别失败，可改选 CPU 后重试。" if recognizer.actual_device == "cuda" else "识别失败，请检查模型与源语言设置。")
+                        self._on_error(
+                            "GPU 识别失败，可改选 CPU 后重试。"
+                            if recognizer.actual_device == "cuda"
+                            else "识别失败，请检查模型与源语言设置。"
+                        )
                     continue
-                if self._stop_event.is_set():
-                    break
+                if self._stop_event.is_set() or not self._is_configuration_current(generation):
+                    continue
                 inference_finished = time.perf_counter()
                 inference_seconds = inference_finished - inference_started
                 logging.info(
@@ -205,8 +337,11 @@ class LivePipeline:
                     inference_seconds, self._queue.qsize() * SystemAudioCapture.block_size / SystemAudioCapture.sample_rate,
                 )
                 detected_language = result.language or source_language
-                updates = transcript.update(result.words, buffer_start / SystemAudioCapture.sample_rate,
-                                            received_samples / SystemAudioCapture.sample_rate)
+                updates = transcript.update(
+                    result.words,
+                    buffer_start / SystemAudioCapture.sample_rate,
+                    received_samples / SystemAudioCapture.sample_rate,
+                )
                 for block_id, text in updates:
                     with self._lock:
                         self._translation_sequence += 1
@@ -215,26 +350,35 @@ class LivePipeline:
                         last_word_end = max((word.end for word in result.words), default=None)
                         last_word_received_at = (
                             None if last_word_end is None else
-                            received_at - (buffer.size/SystemAudioCapture.sample_rate-last_word_end)
+                            received_at - (buffer.size / SystemAudioCapture.sample_rate - last_word_end)
                         )
                         self._on_update(SourceUpdate(
                             sequence, block_id, text, detected_language,
-                            received_samples/SystemAudioCapture.sample_rate,
+                            received_samples / SystemAudioCapture.sample_rate,
                             received_at, inference_started, inference_finished, last_word_received_at,
                         ))
                     else:
                         self._on_source(sequence, text, detected_language, block_id)
                     if detected_language != target_language:
-                        self._submit_translation(sequence, text, detected_language, target_language, block_id)
+                        self._submit_translation(
+                            sequence,
+                            text,
+                            detected_language,
+                            target_language,
+                            block_id,
+                            generation,
+                            options.translation_backend,
+                        )
         except Exception as error:  # 交给界面展示具体失败原因
             if not self._stop_event.is_set():
                 logging.exception("识别会话初始化失败")
                 self._on_error("无法开始识别，请检查模型与计算设备后重试。")
-                # 错误状态由界面显示，生命周期仍由用户的停止操作控制。
                 self._stop_event.wait()
         finally:
-            if self._capture:
-                self._capture.stop(wait=False)
+            if capture:
+                capture.stop(wait=False)
+            if self._capture is capture:
+                self._capture = None
             self._translation_pool.shutdown(wait=False, cancel_futures=True)
             self._notify_stopped()
 
@@ -257,13 +401,29 @@ class LivePipeline:
         with self._lock:
             return self._source_language, self._target_language
 
-    def _submit_translation(self, sequence, text, source_language, target_language, block_id) -> None:
+    def _submit_translation(
+        self,
+        sequence,
+        text,
+        source_language,
+        target_language,
+        block_id,
+        generation,
+        translation_backend,
+    ) -> None:
         """同一字幕段只保留最新待翻译版本，已完成段落不被后续段落覆盖。"""
         text = remove_subtitle_credit(text).strip()
         if not text:
             return
         with self._lock:
-            self._pending_translations[block_id] = (sequence, text, source_language, target_language)
+            self._pending_translations[block_id] = (
+                sequence,
+                text,
+                source_language,
+                target_language,
+                generation,
+                translation_backend,
+            )
             if self._translation_running or self._stop_event.is_set():
                 return
             self._translation_running = True
@@ -274,20 +434,27 @@ class LivePipeline:
                 raise
 
     def _translate_pending(self) -> None:
-        service = TranslationService(self.options.translation_backend)
         while not self._stop_event.is_set():
             with self._lock:
                 if not self._pending_translations:
                     self._translation_running = False
                     return
                 block_id = next(iter(self._pending_translations))
-                sequence, text, source_language, target_language = self._pending_translations.pop(block_id)
+                (
+                    sequence,
+                    text,
+                    source_language,
+                    target_language,
+                    generation,
+                    translation_backend,
+                ) = self._pending_translations.pop(block_id)
             try:
+                service = TranslationService(translation_backend)
                 translated = service.translate(text, source_language, target_language)
             except Exception as error:
                 if not self._stop_event.is_set():
                     logging.exception("字幕翻译失败")
                     self._on_error("翻译暂不可用；原文识别仍在继续。")
                 continue
-            if not self._stop_event.is_set():
+            if not self._stop_event.is_set() and self._is_configuration_current(generation):
                 self._on_translation(sequence, translated, target_language)

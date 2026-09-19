@@ -9,9 +9,9 @@
 AudioSubtitleOverlay 是 Windows 桌面悬浮字幕应用，可识别系统播放声音或麦克风输入，并同时显示源文本和译文。
 
 - 支持系统播放回环和麦克风输入。
-- 支持选择音频来源、源语言、目标语言和识别模型。
-- 支持 CPU 运行；首次使用 GPU 时，应用可按需准备额外运行库。
-- 主程序包约 106 MiB，低于 150 MiB；不要求目标电脑预装 Python。
+- 支持运行中切换音频来源、源语言、目标语言、识别模型和计算设备。
+- 支持 CPU 运行；选择 GPU 时优先使用本机已有的兼容运行库，缺少时才按需准备。
+- 主程序包约 108 MiB，低于 150 MiB；不要求目标电脑预装 Python。
 - 提供独立的 tiny 模型包，便于离线携带默认模型。
 
 ### 下载与运行
@@ -25,7 +25,7 @@ AudioSubtitleOverlay 是 Windows 桌面悬浮字幕应用，可识别系统播�
 
 ### 发布文件
 
-- `AudioSubtitleOverlay_Portable_20260918.zip`：主程序，约 106 MiB。
+- `AudioSubtitleOverlay_Portable_20260918.zip`：主程序，约 108 MiB。
 - `AudioSubtitleOverlay_tiny_model_20260918.zip`：可选 tiny 模型包，约 67 MiB。
 - `SHA256SUMS.txt`：发布文件校验值。
 
@@ -34,9 +34,9 @@ AudioSubtitleOverlay 是 Windows 桌面悬浮字幕应用，可识别系统播�
 AudioSubtitleOverlay is a Windows desktop subtitle overlay. It recognizes system playback or microphone audio locally and displays source text with translation.
 
 - Supports system playback loopback and microphone input.
-- Lets users choose the audio source, languages, and recognition model.
-- Supports CPU mode; GPU mode can prepare additional runtime components when needed.
-- The main portable package is about 106 MiB and does not require Python to be installed on the target computer.
+- Lets users change the audio source, languages, recognition model, and compute device while recognition is running.
+- Supports CPU mode; GPU mode reuses a compatible runtime already available on the computer and prepares it only when missing.
+- The main portable package is about 108 MiB and does not require Python to be installed on the target computer.
 - An optional tiny-model package is provided for offline distribution.
 
 ### Download and run

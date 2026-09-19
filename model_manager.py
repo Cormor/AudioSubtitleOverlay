@@ -599,6 +599,7 @@ class ModelManagerWindow:
 
     def _prepare_gpu_runtime(self) -> None:
         """在后台准备GPU运行库，避免阻塞模型管理窗口。"""
+        from gpu_runtime import configure_gpu_runtime, gpu_runtime_available
         from runtime_components import prepare_component
 
         if self.manager._downloader.is_active("runtime.cuda12"):
@@ -606,6 +607,10 @@ class ModelManagerWindow:
 
         def worker() -> None:
             try:
+                configure_gpu_runtime()
+                if gpu_runtime_available():
+                    self._post(self._apply_runtime_finished, "完成", "已找到可用的本机运行库。")
+                    return
                 prepare_component("runtime.cuda12", on_progress=self._runtime_progress_callback)
             except Exception as error:
                 self._post(self._apply_runtime_finished, "失败", str(error))

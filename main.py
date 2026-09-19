@@ -45,6 +45,7 @@ class Application:
         self._overlay_source_label = "源语言"
         self._closing = False
         self._model_manager_window: ModelManagerWindow | None = None
+        self._live_update_after_id = None
 
         self.root.title("系统音频识别与翻译悬浮窗")
         self.root.geometry("880x880")
@@ -160,9 +161,12 @@ class Application:
         ttk.Label(audio_frame, text="本地模型目录（可选）").grid(
             row=5, column=0, padx=(0, 8), pady=5, sticky="w"
         )
-        ttk.Entry(audio_frame, textvariable=self.model_path_var, width=52).grid(
+        self.model_path_entry = ttk.Entry(audio_frame, textvariable=self.model_path_var, width=52)
+        self.model_path_entry.grid(
             row=5, column=1, columnspan=2, pady=5, sticky="ew"
         )
+        self.model_path_entry.bind("<Return>", self._queue_live_configuration)
+        self.model_path_entry.bind("<FocusOut>", self._queue_live_configuration)
         ttk.Label(
             audio_frame,
             text="可在“模型管理”中下载或查看本地模型。",
@@ -234,6 +238,13 @@ class Application:
 
         for variable in (self.source_var, self.target_var):
             variable.trace_add("write", self._on_language_changed)
+        for variable in (
+            self.audio_device_var,
+            self.model_var,
+            self.device_var,
+            self.translation_var,
+        ):
+            variable.trace_add("write", self._queue_live_configuration)
 
     def _build_overlay_controls(self, parent) -> None:
         ttk.Button(parent, text="选择背景颜色", command=self._choose_background).grid(
@@ -366,25 +377,11 @@ class Application:
         if self.pipeline:
             return
         self._save_settings()
-        source = language_code(self.source_var.get())
-        target = language_code(self.target_var.get(), allow_auto=False)
-        if not target:
-            messagebox.showerror("配置错误", "目标语言不能为空。")
+        options = self._pipeline_options_from_ui()
+        if options is None:
             return
-        audio_device = self.audio_device_var.get()
-        available_devices = tuple(self.audio_combo["values"])
-        if not audio_device or audio_device not in available_devices:
-            self._set_status("音频来源不是当前枚举设备，请刷新设备后重新选择。")
-            return
-        options = PipelineOptions(
-            source_language=source,
-            target_language=target,
-            model_size=self.model_var.get(),
-            device_mode=self.device_var.get(),
-            model_path=self.model_path_var.get(),
-            audio_device=audio_device,
-            translation_backend=self.translation_var.get(),
-        )
+        source = options.source_language
+        target = options.target_language
         self._pending_presentations.clear()
         self._display.reset(source, target)
         self.overlay.reset_content()
@@ -406,6 +403,7 @@ class Application:
             on_error=lambda text: post(self._show_error, text),
             on_stopped=lambda: post(self._pipeline_stopped),
             on_update=lambda update: post(self._show_timed_source, update),
+            on_reset=lambda: post(self._reset_runtime_display),
         )
         self.pipeline.start()
         self.start_button.configure(state="disabled")
@@ -413,12 +411,18 @@ class Application:
         self._show_overlay()
 
     def _stop(self) -> None:
+        if self._live_update_after_id is not None:
+            self.root.after_cancel(self._live_update_after_id)
+            self._live_update_after_id = None
         pipeline = self.pipeline
         if pipeline:
             self._set_status("正在停止识别……")
             pipeline.stop()
 
     def _pipeline_stopped(self) -> None:
+        if self._live_update_after_id is not None:
+            self.root.after_cancel(self._live_update_after_id)
+            self._live_update_after_id = None
         self.pipeline = None
         if not self._closing:
             self.start_button.configure(state="normal")
@@ -484,11 +488,60 @@ class Application:
 
     def _on_language_changed(self, *_args) -> None:
         self._update_translation_visibility()
-        if self.pipeline:
-            self.pipeline.set_languages(
-                language_code(self.source_var.get()),
-                language_code(self.target_var.get(), allow_auto=False) or "zh",
-            )
+        self._queue_live_configuration()
+
+    def _pipeline_options_from_ui(self) -> PipelineOptions | None:
+        """读取并校验当前控件值，供启动和运行中切换共用。"""
+        source = language_code(self.source_var.get())
+        target = language_code(self.target_var.get(), allow_auto=False)
+        if not target:
+            if self.pipeline is None:
+                messagebox.showerror("配置错误", "目标语言不能为空。")
+            else:
+                self._set_status("目标语言不能为空，未应用这次修改。")
+            return None
+        audio_device = self.audio_device_var.get()
+        available_devices = tuple(self.audio_combo["values"])
+        if not audio_device or audio_device not in available_devices:
+            self._set_status("音频来源不是当前枚举设备，请刷新设备后重新选择。")
+            return None
+        return PipelineOptions(
+            source_language=source,
+            target_language=target,
+            model_size=self.model_var.get(),
+            device_mode=self.device_var.get(),
+            model_path=self.model_path_var.get(),
+            audio_device=audio_device,
+            translation_backend=self.translation_var.get(),
+        )
+
+    def _queue_live_configuration(self, *_args) -> None:
+        """把连续的界面修改合并，交给识别线程应用。"""
+        if self.pipeline is None or self._closing:
+            return
+        if self._live_update_after_id is not None:
+            self.root.after_cancel(self._live_update_after_id)
+        self._live_update_after_id = self.root.after(120, self._apply_live_configuration)
+
+    def _apply_live_configuration(self) -> None:
+        self._live_update_after_id = None
+        pipeline = self.pipeline
+        if pipeline is None:
+            return
+        options = self._pipeline_options_from_ui()
+        if options is None:
+            return
+        if pipeline.update_options(options):
+            self._set_status("正在应用新的识别设置……")
+
+    def _reset_runtime_display(self) -> None:
+        """切换设置后清空上一组字幕，避免新旧内容混在一起。"""
+        source = language_code(self.source_var.get())
+        target = language_code(self.target_var.get(), allow_auto=False) or "zh"
+        self._pending_presentations.clear()
+        self._display.reset(source, target)
+        self.overlay.reset_content()
+        self._flush_display()
 
     def _update_translation_visibility(self) -> None:
         source = language_code(self.source_var.get())
@@ -663,6 +716,9 @@ class Application:
         if self._closing:
             return
         self._closing = True
+        if self._live_update_after_id is not None:
+            self.root.after_cancel(self._live_update_after_id)
+            self._live_update_after_id = None
         if self.pipeline:
             self.pipeline.stop()
             self.pipeline = None

@@ -15,7 +15,7 @@ USAGE_TEXT = """AudioSubtitleOverlay 精简版使用说明
 2. 双击 AudioSubtitleOverlay\\AudioSubtitleOverlay.exe 即可运行，不需要安装Python。
 3. 不要单独移动或删除 _internal 文件夹；它包含应用自身的Windows运行时文件。
 4. 首次开始识别时，如果用户目录没有模型，应用会自动下载默认的 tiny 模型。
-5. 检测到 NVIDIA 驱动且选择自动GPU时，应用会自动准备 CUDA 12 用户态运行库。
+5. 检测到 NVIDIA 驱动且选择GPU时，应用会先使用本机已有的兼容运行库；找不到时才准备 CUDA 12 运行库。
    GPU运行库约1.36GB，放在用户目录，不占用本压缩包体积；CPU模式不需要它。
 6. 下载界面会显示进度、速度，并支持暂停、继续和HTTP断点续传。网络中断后重新运行会继续保留的断点。
 7. 用户级文件位置：
