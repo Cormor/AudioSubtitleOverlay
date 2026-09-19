@@ -46,6 +46,7 @@ class Application:
         self._closing = False
         self._model_manager_window: ModelManagerWindow | None = None
         self._live_update_after_id = None
+        self._drain_after_id = None
 
         self.root.title("系统音频识别与翻译悬浮窗")
         self.root.geometry("880x880")
@@ -67,7 +68,7 @@ class Application:
         self._show_overlay()
         # 等待界面进入事件循环后自动开始识别，启动时即可接收连续结果。
         self.root.after_idle(self._start)
-        self.root.after(10, self._drain_events)
+        self._drain_after_id = self.root.after(10, self._drain_events)
 
     def _create_variables(self) -> None:
         self.source_var = tk.StringVar(value=self.settings.source_language)
@@ -685,6 +686,7 @@ class Application:
 
     def _drain_events(self) -> None:
         """只在主线程调用 Tk，后台线程只投递普通队列消息。"""
+        self._drain_after_id = None
         if self._closing:
             return
         self._in_event_drain = True
@@ -699,7 +701,8 @@ class Application:
             self._in_event_drain = False
             # 一个定时批次只提交一次悬浮窗快照，避免识别频率直接决定重绘频率。
             self._flush_display()
-            self.root.after(10, self._drain_events)
+            if not self._closing:
+                self._drain_after_id = self.root.after(10, self._drain_events)
 
     def _flush_display(self) -> None:
         """将显示模块的脏状态一次性提交给主窗口和悬浮窗。"""
@@ -719,6 +722,9 @@ class Application:
         if self._live_update_after_id is not None:
             self.root.after_cancel(self._live_update_after_id)
             self._live_update_after_id = None
+        if self._drain_after_id is not None:
+            self.root.after_cancel(self._drain_after_id)
+            self._drain_after_id = None
         if self.pipeline:
             self.pipeline.stop()
             self.pipeline = None
