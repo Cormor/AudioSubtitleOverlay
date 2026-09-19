@@ -72,10 +72,13 @@ class _FakeRecognizer:
 
 
 class _FakeTranslationService:
+    calls: list[tuple[str, str | None, str]] = []
+
     def __init__(self, _backend: str) -> None:
         pass
 
     def translate(self, text: str, _source: str | None, _target: str) -> str:
+        self.__class__.calls.append((text, _source, _target))
         return text
 
 
@@ -83,6 +86,7 @@ class PipelineReconfigurationTests(unittest.TestCase):
     def setUp(self) -> None:
         _FakeCapture.instances.clear()
         _FakeRecognizer.instances.clear()
+        _FakeTranslationService.calls.clear()
 
     @staticmethod
     def _options(**changes) -> PipelineOptions:
@@ -157,6 +161,7 @@ class PipelineReconfigurationTests(unittest.TestCase):
                     source_language="de",
                     target_language="zh",
                     model_size="base",
+                    device_mode="NVIDIA GPU（float16）",
                     audio_device="设备B",
                 )
             )
@@ -167,12 +172,18 @@ class PipelineReconfigurationTests(unittest.TestCase):
                 ):
                     break
                 time.sleep(0.02)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and not any(
+                target == "zh" for _, _, target in _FakeTranslationService.calls
+            ):
+                time.sleep(0.02)
             runner.stop()
 
         self.assertGreaterEqual(len(_FakeRecognizer.instances), 2)
         self.assertEqual(_FakeRecognizer.instances[-1].model_size, "base")
-        self.assertEqual(_FakeRecognizer.instances[-1].device_mode, "CPU（int8）")
+        self.assertEqual(_FakeRecognizer.instances[-1].device_mode, "NVIDIA GPU（float16）")
         self.assertTrue(any(item.device_name == "设备B" for item in _FakeCapture.instances))
+        self.assertTrue(any(target == "zh" for _, _, target in _FakeTranslationService.calls))
         self.assertTrue(resets)
         self.assertEqual(errors, [])
 
