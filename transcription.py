@@ -83,14 +83,12 @@ class WhisperRecognizer:
                 candidates = [("cpu", "int8")]
             else:
                 try:
-                    configure_gpu_runtime()
                     if gpu_runtime_available():
                         self._on_status("正在使用本机NVIDIA GPU运行库……")
                     else:
                         self._on_status("正在准备NVIDIA GPU运行库……")
                         prepare_component("runtime.cuda12", on_progress=self._download_progress)
-                        configure_gpu_runtime()
-                        if not gpu_runtime_available():
+                        if not gpu_runtime_available(refresh=True):
                             raise RuntimeError("已准备的NVIDIA运行库无法加载。")
                 except Exception as error:
                     if self.device_mode == "NVIDIA GPU（float16）":

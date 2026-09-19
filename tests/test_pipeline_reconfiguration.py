@@ -54,8 +54,12 @@ class _FakeRecognizer:
         self.model_size = model_size
         self.device_mode = device_mode
         self.model_path = model_path
-        self.actual_device = "cpu"
-        self.actual_compute_type = "int8"
+        self.actual_device = (
+            "cuda"
+            if device_mode in {"自动（优先GPU）", "NVIDIA GPU（float16）"}
+            else "cpu"
+        )
+        self.actual_compute_type = "float16" if self.actual_device == "cuda" else "int8"
         self.languages: list[str | None] = []
         self.loaded = False
         self.__class__.instances.append(self)
@@ -184,6 +188,42 @@ class PipelineReconfigurationTests(unittest.TestCase):
         self.assertEqual(_FakeRecognizer.instances[-1].device_mode, "NVIDIA GPU（float16）")
         self.assertTrue(any(item.device_name == "设备B" for item in _FakeCapture.instances))
         self.assertTrue(any(target == "zh" for _, _, target in _FakeTranslationService.calls))
+        self.assertTrue(resets)
+        self.assertEqual(errors, [])
+
+    def test_equivalent_gpu_device_modes_do_not_reload_model(self):
+        resets = []
+        errors = []
+
+        with patch.object(pipeline, "SystemAudioCapture", _FakeCapture), patch.object(
+            pipeline, "WhisperRecognizer", _FakeRecognizer
+        ):
+            runner = LivePipeline(
+                self._options(device_mode="NVIDIA GPU（float16）"),
+                lambda _text: None,
+                lambda *_args: None,
+                lambda *_args: None,
+                errors.append,
+                lambda: None,
+                on_reset=lambda: resets.append(True),
+            )
+            runner.start()
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                if _FakeRecognizer.instances and _FakeRecognizer.instances[0].languages:
+                    break
+                time.sleep(0.02)
+            self.assertTrue(_FakeRecognizer.instances)
+
+            runner.update_options(self._options(device_mode="自动（优先GPU）"))
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and not resets:
+                time.sleep(0.02)
+            time.sleep(0.2)
+            runner.stop()
+
+        self.assertEqual(len(_FakeRecognizer.instances), 1)
+        self.assertEqual(len(_FakeCapture.instances), 1)
         self.assertTrue(resets)
         self.assertEqual(errors, [])
 

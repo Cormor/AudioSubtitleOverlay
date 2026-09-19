@@ -15,6 +15,8 @@ _REQUIRED_DLLS = (
     'nvrtc-builtins64_129.dll',
 )
 _dll_handles: dict[str, object] = {}
+_runtime_directories: tuple[str, ...] | None = None
+_runtime_available: bool | None = None
 
 
 def _append_unique(paths: list[Path], candidate: Path) -> None:
@@ -71,20 +73,27 @@ def _candidate_roots() -> list[Path]:
     return roots
 
 
-def runtime_dll_directories() -> list[str]:
+def runtime_dll_directories(refresh: bool = False) -> list[str]:
     """返回可能包含 CUDA DLL 的目录，供当前进程加载。"""
+    global _runtime_directories
+    if _runtime_directories is not None and not refresh:
+        return list(_runtime_directories)
     directories: list[Path] = []
     for root in _candidate_roots():
         _append_unique(directories, root)
         _append_unique(directories, root / 'bin')
         for package in _GPU_PACKAGES:
             _append_unique(directories, root / 'nvidia' / package / 'bin')
-    return [str(path) for path in directories]
+    _runtime_directories = tuple(str(path) for path in directories)
+    return list(_runtime_directories)
 
 
-def configure_gpu_runtime() -> list[str]:
+def configure_gpu_runtime(refresh: bool = False) -> list[str]:
     """只调整当前进程的 DLL 搜索路径，不修改系统环境变量或驱动。"""
-    paths = runtime_dll_directories()
+    global _runtime_available
+    if refresh:
+        _runtime_available = None
+    paths = runtime_dll_directories(refresh=refresh)
     if sys.platform == 'win32':
         for directory in paths:
             if directory not in _dll_handles:
@@ -97,16 +106,21 @@ def configure_gpu_runtime() -> list[str]:
     return paths
 
 
-def gpu_runtime_available() -> bool:
+def gpu_runtime_available(refresh: bool = False) -> bool:
     """实际尝试加载所需 DLL，确认当前进程可以使用本机 GPU 运行库。"""
+    global _runtime_available
     if sys.platform != 'win32':
         return False
-    configure_gpu_runtime()
+    if _runtime_available is not None and not refresh:
+        return _runtime_available
+    configure_gpu_runtime(refresh=refresh)
     try:
         import ctypes
 
         for name in _REQUIRED_DLLS:
             ctypes.WinDLL(name)
     except OSError:
+        _runtime_available = False
         return False
+    _runtime_available = True
     return True

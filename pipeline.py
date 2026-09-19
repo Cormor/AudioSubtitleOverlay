@@ -33,6 +33,34 @@ class PipelineOptions:
     translation_backend: str
 
 
+_GPU_DEVICE_MODES = frozenset(("自动（优先GPU）", "NVIDIA GPU（float16）"))
+
+
+def _model_source_key(options: PipelineOptions) -> tuple[str, str]:
+    """返回实际模型来源；指定目录时模型大小只用于界面显示。"""
+    model_path = options.model_path.strip()
+    if model_path:
+        return "path", model_path
+    return "model", options.model_size
+
+
+def _device_requires_reload(
+    active_options: PipelineOptions,
+    options: PipelineOptions,
+    recognizer: WhisperRecognizer | None,
+) -> bool:
+    """只有实际计算后端会变化时才重新加载识别模型。"""
+    if recognizer is None:
+        return True
+    if active_options.device_mode == options.device_mode:
+        return False
+    if recognizer.actual_device == "cuda":
+        return options.device_mode not in _GPU_DEVICE_MODES
+    if recognizer.actual_device == "cpu":
+        return options.device_mode != "CPU（int8）"
+    return True
+
+
 class LivePipeline:
     """按有界重叠窗口识别，向独立显示模块提交段落版本。"""
 
@@ -173,9 +201,8 @@ class LivePipeline:
                 configuration_changed = requested is not None or generation != active_generation
                 model_changed = (
                     active_options is None
-                    or active_options.model_size != options.model_size
-                    or active_options.device_mode != options.device_mode
-                    or active_options.model_path != options.model_path
+                    or _model_source_key(active_options) != _model_source_key(options)
+                    or _device_requires_reload(active_options, options, recognizer)
                 )
                 audio_changed = (
                     active_options is None
