@@ -77,6 +77,32 @@ class _FakeRecognizer:
         )
 
 
+class _BurstCapture:
+    sample_rate = 16_000
+    block_size = 320
+
+    def __init__(self, device_name: str = "") -> None:
+        self.device_name = device_name
+
+    def start(self, on_audio, on_error, on_ready=None) -> None:
+        if on_ready:
+            on_ready(self.device_name)
+        # 在识别线程开始取数据前一次性放入六秒音频，模拟推理期间形成的积压。
+        for _ in range(300):
+            on_audio(np.ones(self.block_size, dtype=np.float32))
+
+    def stop(self, wait: bool = False) -> None:
+        return None
+
+
+class _RecordingRecognizer(_FakeRecognizer):
+    audio_sizes: list[int] = []
+
+    def transcribe(self, audio, source_language, **kwargs) -> SimpleNamespace:
+        self.__class__.audio_sizes.append(audio.size)
+        return super().transcribe(audio, source_language, **kwargs)
+
+
 class _FakeTranslationService:
     calls: list[tuple[str, str | None, str]] = []
 
@@ -106,6 +132,29 @@ class PipelineReconfigurationTests(unittest.TestCase):
             translation_backend="仅使用本地 Argos",
         )
         return replace(options, **changes)
+
+    def test_backlogged_audio_is_processed_as_one_latest_window(self):
+        _RecordingRecognizer.audio_sizes.clear()
+
+        with patch.object(pipeline, "SystemAudioCapture", _BurstCapture), patch.object(
+            pipeline, "WhisperRecognizer", _RecordingRecognizer
+        ):
+            runner = LivePipeline(
+                self._options(),
+                lambda _text: None,
+                lambda *_args: None,
+                lambda *_args: None,
+                lambda _text: None,
+                lambda: None,
+            )
+            runner.start()
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and not _RecordingRecognizer.audio_sizes:
+                time.sleep(0.02)
+            runner.stop()
+
+        self.assertEqual(len(_RecordingRecognizer.audio_sizes), 1)
+        self.assertEqual(_RecordingRecognizer.audio_sizes[0], 96_000)
 
     def test_update_options_keeps_only_latest_queued_configuration(self):
         runner = LivePipeline(

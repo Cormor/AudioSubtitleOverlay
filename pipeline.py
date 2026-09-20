@@ -306,10 +306,8 @@ class LivePipeline:
                     self._stop_event.wait()
                     break
                 new_parts = [frames] if frames is not None else []
-                # 合并推理期间积累的音频，不逐个补做过期的触发点。
-                # 每轮最多推进两秒，八秒窗口保留至少六秒重叠，音频不被跳过。
-                merge_limit = max(1, 2 * SystemAudioCapture.sample_rate // SystemAudioCapture.block_size)
-                for _ in range(merge_limit - 1):
+                # 把推理期间收到的全部音频合并到下一次窗口，不逐个重放过期触发点。
+                while True:
                     try:
                         more, more_error, more_received_at = self._queue.get_nowait()
                     except queue.Empty:
