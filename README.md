@@ -10,7 +10,7 @@ AudioSubtitleOverlay 是 Windows 桌面悬浮字幕应用，可识别系统播�
 
 - 支持系统播放回环和麦克风输入。
 - 支持运行中切换音频来源、源语言、目标语言、识别模型、计算设备和识别质量参数。
-- 可调整搜索范围、前文参考、解码回退、日常/游戏/计算机词表和自定义术语。
+- 可调整搜索范围、前文参考、解码回退、游戏/计算机术语和自定义术语。
 - 支持 CPU 运行；选择 GPU 时优先使用本机已有的兼容运行库，缺少时才按需准备。
 - 主程序包约 108 MiB，低于 150 MiB；不要求目标电脑预装 Python。
 - 提供独立的 tiny 模型包，便于离线携带默认模型。
@@ -36,7 +36,7 @@ AudioSubtitleOverlay is a Windows desktop subtitle overlay. It recognizes system
 
 - Supports system playback loopback and microphone input.
 - Lets users change the audio source, languages, recognition model, compute device, and recognition quality settings while recognition is running.
-- Provides adjustable search range, context use, decode fallback, daily/gaming/computing lexicons, and custom terms.
+- Provides adjustable search range, context use, decode fallback, gaming/computing terms, and custom terms.
 - Supports CPU mode; GPU mode reuses a compatible runtime already available on the computer and prepares it only when missing.
 - The main portable package is about 108 MiB and does not require Python to be installed on the target computer.
 - An optional tiny-model package is provided for offline distribution.

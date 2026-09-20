@@ -266,7 +266,7 @@ class Application:
         )
         ttk.Label(
             quality_frame,
-            text="提示日常、游戏或计算机术语，运行中只取高优先级词条。",
+            text="只提示少量专有术语；自定义术语优先。",
             foreground="#5c6773",
         ).grid(row=2, column=2, padx=(10, 0), pady=5, sticky="w")
         ttk.Label(quality_frame, text="自定义术语").grid(

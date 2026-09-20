@@ -12,10 +12,9 @@ RECOGNITION_BEAM_SIZES = (1, 3, 5)
 RECOGNITION_TEMPERATURE_SCHEDULES = ("0", "0,0.2,0.4")
 RECOGNITION_LEXICON_OPTIONS = (
     "关闭",
-    "日常",
     "游戏",
     "计算机",
-    "日常、游戏、计算机",
+    "游戏、计算机",
 )
 
 
@@ -41,7 +40,7 @@ class Settings:
     recognition_beam_size: int = 1
     recognition_condition_on_previous_text: bool = False
     recognition_temperature_schedule: str = "0"
-    recognition_lexicon: str = "日常、游戏、计算机"
+    recognition_lexicon: str = "关闭"
     recognition_hotwords: str = ""
     model_path: str = ""
     loopback_device: str = ""

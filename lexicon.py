@@ -14,12 +14,17 @@ _LEXICON_FILES = {
 }
 _LEXICON_MODES = {
     "关闭": (),
-    "日常": ("日常",),
     "游戏": ("游戏",),
     "计算机": ("计算机",),
-    "日常、游戏、计算机": ("日常", "游戏", "计算机"),
+    "游戏、计算机": ("游戏", "计算机"),
+    # 兼容旧调用；旧的通用模式不再把日常短语加入识别提示。
+    "日常": (),
+    "日常、游戏、计算机": ("游戏", "计算机"),
 }
 _CUSTOM_SPLIT = re.compile(r"[\s,，;；、]+")
+_BUILTIN_MAX_CHARACTERS = 32
+_BUILTIN_MIN_TERM_LENGTH = 4
+_BUILTIN_MAX_TERM_LENGTH = 12
 
 
 def _lexicon_root() -> Path:
@@ -53,29 +58,36 @@ def _custom_terms(text: str) -> list[str]:
     return [term.strip() for term in _CUSTOM_SPLIT.split(text.strip()) if term.strip()]
 
 
-def _usable_term(term: str) -> bool:
-    return len(term) >= 2 and len(term) <= 32 and not any(
-        char in term for char in "\r\n\t"
-    )
+def _usable_term(term: str, *, builtin: bool = False) -> bool:
+    if not term or any(char in term for char in "\r\n\t"):
+        return False
+    if builtin:
+        return _BUILTIN_MIN_TERM_LENGTH <= len(term) <= _BUILTIN_MAX_TERM_LENGTH
+    return 2 <= len(term) <= 32
 
 
 @lru_cache(maxsize=256)
 def build_hotwords(lexicon_mode: str, custom_text: str, max_characters: int = 180) -> str:
-    """按词表选择有限提示词，避免超过语音模型提示窗口。"""
+    """按词表选择少量提示词，避免普通短语干扰识别。"""
     selected: list[str] = []
     selected_keys: set[str] = set()
     used_characters = 0
+    builtin_characters = 0
 
-    def add(term: str) -> bool:
-        nonlocal used_characters
-        if not _usable_term(term) or term in selected_keys:
+    def add(term: str, *, builtin: bool = False) -> bool:
+        nonlocal builtin_characters, used_characters
+        if not _usable_term(term, builtin=builtin) or term in selected_keys:
             return False
         extra = len(term) + (1 if selected else 0)
         if used_characters + extra > max_characters:
             return False
+        if builtin and builtin_characters + extra > min(max_characters, _BUILTIN_MAX_CHARACTERS):
+            return False
         selected.append(term)
         selected_keys.add(term)
         used_characters += extra
+        if builtin:
+            builtin_characters += extra
         return True
 
     for term in _custom_terms(custom_text):
@@ -91,13 +103,19 @@ def build_hotwords(lexicon_mode: str, custom_text: str, max_characters: int = 18
         for category in categories
     ]
     positions = [0] * len(entries_by_category)
-    while entries_by_category and used_characters < max_characters:
+    while (
+        entries_by_category
+        and used_characters < max_characters
+        and builtin_characters < min(max_characters, _BUILTIN_MAX_CHARACTERS)
+    ):
         added_in_round = False
         for index, (entries, position) in enumerate(zip(entries_by_category, positions)):
+            if builtin_characters >= min(max_characters, _BUILTIN_MAX_CHARACTERS):
+                break
             while position < len(entries):
                 term = entries[position][0]
                 position += 1
-                if add(term):
+                if add(term, builtin=True):
                     added_in_round = True
                     break
             positions[index] = position
