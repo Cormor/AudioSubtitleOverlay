@@ -61,14 +61,16 @@ class _FakeRecognizer:
         )
         self.actual_compute_type = "float16" if self.actual_device == "cuda" else "int8"
         self.languages: list[str | None] = []
+        self.decode_options: list[dict] = []
         self.loaded = False
         self.__class__.instances.append(self)
 
     def load(self) -> None:
         self.loaded = True
 
-    def transcribe(self, _audio, source_language) -> SimpleNamespace:
+    def transcribe(self, _audio, source_language, **kwargs) -> SimpleNamespace:
         self.languages.append(source_language)
+        self.decode_options.append(kwargs)
         return SimpleNamespace(
             language=source_language or "en",
             words=[RecognizedWord(0.0, 0.8, "hello")],
@@ -225,6 +227,56 @@ class PipelineReconfigurationTests(unittest.TestCase):
         self.assertEqual(len(_FakeRecognizer.instances), 1)
         self.assertEqual(len(_FakeCapture.instances), 1)
         self.assertTrue(resets)
+        self.assertEqual(errors, [])
+
+    def test_quality_options_apply_without_reloading_model(self):
+        errors = []
+
+        with patch.object(pipeline, "SystemAudioCapture", _FakeCapture), patch.object(
+            pipeline, "WhisperRecognizer", _FakeRecognizer
+        ):
+            runner = LivePipeline(
+                self._options(),
+                lambda _text: None,
+                lambda *_args: None,
+                lambda *_args: None,
+                errors.append,
+                lambda: None,
+            )
+            runner.start()
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                if _FakeRecognizer.instances and _FakeRecognizer.instances[0].decode_options:
+                    break
+                time.sleep(0.02)
+            self.assertTrue(_FakeRecognizer.instances)
+
+            runner.update_options(
+                self._options(
+                    beam_size=5,
+                    condition_on_previous_text=True,
+                    temperature_schedule="0,0.2,0.4",
+                    lexicon_mode="计算机",
+                    custom_hotwords="项目专名",
+                )
+            )
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                if _FakeRecognizer.instances[0].decode_options[-1].get("beam_size") == 5:
+                    break
+                time.sleep(0.02)
+            runner.stop()
+
+        self.assertEqual(len(_FakeRecognizer.instances), 1)
+        self.assertEqual(len(_FakeCapture.instances), 1)
+        self.assertEqual(_FakeRecognizer.instances[0].decode_options[-1]["beam_size"], 5)
+        self.assertTrue(_FakeRecognizer.instances[0].decode_options[-1]["condition_on_previous_text"])
+        self.assertEqual(
+            _FakeRecognizer.instances[0].decode_options[-1]["temperature_schedule"],
+            "0,0.2,0.4",
+        )
+        self.assertEqual(_FakeRecognizer.instances[0].decode_options[-1]["lexicon_mode"], "计算机")
+        self.assertEqual(_FakeRecognizer.instances[0].decode_options[-1]["custom_hotwords"], "项目专名")
         self.assertEqual(errors, [])
 
     def test_failed_model_change_waits_for_another_configuration(self):

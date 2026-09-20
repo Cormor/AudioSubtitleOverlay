@@ -20,7 +20,21 @@ from languages import (
 from model_manager import ModelManagerWindow
 from overlay import OverlayWindow
 from pipeline import LivePipeline, PipelineOptions
-from settings import Settings, application_data_dir
+from settings import (
+    RECOGNITION_BEAM_SIZES,
+    RECOGNITION_LEXICON_OPTIONS,
+    Settings,
+    application_data_dir,
+)
+
+
+_TEMPERATURE_LABELS = {
+    "0": "仅使用 0",
+    "0,0.2,0.4": "低温回退（0、0.2、0.4）",
+}
+_TEMPERATURE_VALUES_BY_LABEL = {
+    label: value for value, label in _TEMPERATURE_LABELS.items()
+}
 
 
 class Application:
@@ -80,6 +94,16 @@ class Application:
         self.target_var = tk.StringVar(value=self.settings.target_language)
         self.model_var = tk.StringVar(value=self.settings.recognition_model)
         self.device_var = tk.StringVar(value=self.settings.recognition_device)
+        self.beam_size_var = tk.StringVar(value=str(self.settings.recognition_beam_size))
+        self.context_var = tk.StringVar(
+            value="启用" if self.settings.recognition_condition_on_previous_text else "关闭"
+        )
+        temperature_value = self.settings.recognition_temperature_schedule
+        self.temperature_var = tk.StringVar(
+            value=_TEMPERATURE_LABELS.get(temperature_value, _TEMPERATURE_LABELS["0"])
+        )
+        self.lexicon_var = tk.StringVar(value=self.settings.recognition_lexicon)
+        self.custom_hotwords_var = tk.StringVar(value=self.settings.recognition_hotwords)
         self.model_path_var = tk.StringVar(value=self.settings.model_path)
         self.audio_device_var = tk.StringVar(value=self.settings.loopback_device)
         self.audio_default_var = tk.StringVar(value="Windows 默认播放：读取中……")
@@ -204,6 +228,80 @@ class Application:
         ).grid(row=6, column=1, columnspan=2, sticky="w")
         audio_frame.columnconfigure(1, weight=1)
 
+        quality_frame = ttk.LabelFrame(container, text="识别质量", padding=12)
+        quality_frame.pack(fill="x", pady=(0, 10))
+        self._add_labeled_combo(
+            quality_frame,
+            0,
+            "搜索范围",
+            self.beam_size_var,
+            [str(value) for value in RECOGNITION_BEAM_SIZES],
+            width=12,
+        )
+        ttk.Label(
+            quality_frame,
+            text="数值越大通常越准，但推理更慢。",
+            foreground="#5c6773",
+        ).grid(row=0, column=2, padx=(10, 0), pady=5, sticky="w")
+        self._add_labeled_combo(
+            quality_frame,
+            1,
+            "参考前文",
+            self.context_var,
+            ["关闭", "启用"],
+            width=12,
+        )
+        ttk.Label(
+            quality_frame,
+            text="结合当前音频窗口内的前文；出现重复时可关闭。",
+            foreground="#5c6773",
+        ).grid(row=1, column=2, padx=(10, 0), pady=5, sticky="w")
+        self._add_labeled_combo(
+            quality_frame,
+            2,
+            "识别词表",
+            self.lexicon_var,
+            list(RECOGNITION_LEXICON_OPTIONS),
+            width=24,
+        )
+        ttk.Label(
+            quality_frame,
+            text="提示日常、游戏或计算机术语，运行中只取高优先级词条。",
+            foreground="#5c6773",
+        ).grid(row=2, column=2, padx=(10, 0), pady=5, sticky="w")
+        ttk.Label(quality_frame, text="自定义术语").grid(
+            row=3, column=0, padx=(0, 8), pady=5, sticky="w"
+        )
+        self.custom_hotwords_entry = ttk.Entry(
+            quality_frame,
+            textvariable=self.custom_hotwords_var,
+            width=52,
+        )
+        self.custom_hotwords_entry.grid(
+            row=3, column=1, columnspan=2, pady=5, sticky="ew"
+        )
+        self.custom_hotwords_entry.bind("<Return>", self._queue_live_configuration)
+        self.custom_hotwords_entry.bind("<FocusOut>", self._queue_live_configuration)
+        ttk.Label(
+            quality_frame,
+            text="填写人名、游戏名或专有名词，使用空格或逗号分隔。",
+            foreground="#5c6773",
+        ).grid(row=4, column=1, columnspan=2, sticky="w")
+        self._add_labeled_combo(
+            quality_frame,
+            5,
+            "解码回退",
+            self.temperature_var,
+            list(_TEMPERATURE_LABELS.values()),
+            width=28,
+        )
+        ttk.Label(
+            quality_frame,
+            text="遇到低概率或重复结果时再尝试备用温度，可能增加耗时。",
+            foreground="#5c6773",
+        ).grid(row=5, column=2, padx=(10, 0), pady=5, sticky="w")
+        quality_frame.columnconfigure(1, weight=1)
+
         translation_frame = ttk.LabelFrame(container, text="翻译", padding=12)
         translation_frame.pack(fill="x", pady=(0, 10))
         self._add_labeled_combo(
@@ -272,6 +370,11 @@ class Application:
             self.audio_device_var,
             self.model_var,
             self.device_var,
+            self.beam_size_var,
+            self.context_var,
+            self.temperature_var,
+            self.lexicon_var,
+            self.custom_hotwords_var,
             self.translation_var,
         ):
             variable.trace_add("write", self._queue_live_configuration)
@@ -538,7 +641,7 @@ class Application:
         )
 
     def _show_preview(self, sequence: int, text: str, language: str | None, block_id: int) -> None:
-        """显示短窗口即时草稿，质量通道到达后由稳定正文覆盖。"""
+        """显示短窗口即时草稿，完整识别结果到达后覆盖当前文字。"""
         self._apply_display_event(
             DisplayEvent("preview", sequence, text, language, block_id)
         )
@@ -570,6 +673,12 @@ class Application:
         if not audio_device or audio_device not in available_devices:
             self._set_status("音频来源不是当前枚举设备，请刷新设备后重新选择。")
             return None
+        try:
+            beam_size = int(self.beam_size_var.get())
+        except ValueError:
+            beam_size = RECOGNITION_BEAM_SIZES[0]
+        if beam_size not in RECOGNITION_BEAM_SIZES:
+            beam_size = RECOGNITION_BEAM_SIZES[0]
         return PipelineOptions(
             source_language=source,
             target_language=target,
@@ -578,6 +687,13 @@ class Application:
             model_path=self.model_path_var.get(),
             audio_device=audio_device,
             translation_backend=self.translation_var.get(),
+            beam_size=beam_size,
+            condition_on_previous_text=self.context_var.get() == "启用",
+            temperature_schedule=_TEMPERATURE_VALUES_BY_LABEL.get(
+                self.temperature_var.get(), "0"
+            ),
+            lexicon_mode=self.lexicon_var.get(),
+            custom_hotwords=self.custom_hotwords_var.get(),
         )
 
     def _queue_live_configuration(self, *_args) -> None:
@@ -729,6 +845,16 @@ class Application:
         self.settings.target_language = self.target_var.get()
         self.settings.recognition_model = self.model_var.get()
         self.settings.recognition_device = self.device_var.get()
+        try:
+            self.settings.recognition_beam_size = int(self.beam_size_var.get())
+        except ValueError:
+            self.settings.recognition_beam_size = RECOGNITION_BEAM_SIZES[0]
+        self.settings.recognition_condition_on_previous_text = self.context_var.get() == "启用"
+        self.settings.recognition_temperature_schedule = _TEMPERATURE_VALUES_BY_LABEL.get(
+            self.temperature_var.get(), "0"
+        )
+        self.settings.recognition_lexicon = self.lexicon_var.get()
+        self.settings.recognition_hotwords = self.custom_hotwords_var.get()
         self.settings.model_path = self.model_path_var.get()
         self.settings.loopback_device = self.audio_device_var.get()
         self.settings.translation_backend = self.translation_var.get()

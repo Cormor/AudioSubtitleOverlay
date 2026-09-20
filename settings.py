@@ -8,6 +8,17 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 
+RECOGNITION_BEAM_SIZES = (1, 3, 5)
+RECOGNITION_TEMPERATURE_SCHEDULES = ("0", "0,0.2,0.4")
+RECOGNITION_LEXICON_OPTIONS = (
+    "关闭",
+    "日常",
+    "游戏",
+    "计算机",
+    "日常、游戏、计算机",
+)
+
+
 def application_data_dir() -> Path:
     """返回 Windows 用户级配置目录。"""
     appdata = os.environ.get("APPDATA")
@@ -27,6 +38,11 @@ class Settings:
     target_language: str = "中文"
     recognition_model: str = "tiny"
     recognition_device: str = "自动（优先GPU）"
+    recognition_beam_size: int = 1
+    recognition_condition_on_previous_text: bool = False
+    recognition_temperature_schedule: str = "0"
+    recognition_lexicon: str = "日常、游戏、计算机"
+    recognition_hotwords: str = ""
     model_path: str = ""
     loopback_device: str = ""
     translation_backend: str = "本地优先，失败转在线"
@@ -64,6 +80,30 @@ class Settings:
                     values[key] = min(1.0, max(0.0, float(values[key])))
                 except (TypeError, ValueError):
                     values.pop(key)
+        if "recognition_beam_size" in values:
+            try:
+                beam_size = int(values["recognition_beam_size"])
+                values["recognition_beam_size"] = (
+                    beam_size if beam_size in RECOGNITION_BEAM_SIZES else cls.recognition_beam_size
+                )
+            except (TypeError, ValueError):
+                values.pop("recognition_beam_size")
+        if "recognition_condition_on_previous_text" in values:
+            condition = values["recognition_condition_on_previous_text"]
+            if isinstance(condition, str):
+                values["recognition_condition_on_previous_text"] = condition.lower() in {
+                    "1", "true", "yes", "on", "启用"
+                }
+            else:
+                values["recognition_condition_on_previous_text"] = bool(condition)
+        if "recognition_temperature_schedule" in values and values[
+            "recognition_temperature_schedule"
+        ] not in RECOGNITION_TEMPERATURE_SCHEDULES:
+            values.pop("recognition_temperature_schedule")
+        if "recognition_lexicon" in values and values["recognition_lexicon"] not in RECOGNITION_LEXICON_OPTIONS:
+            values.pop("recognition_lexicon")
+        if "recognition_hotwords" in values and not isinstance(values["recognition_hotwords"], str):
+            values.pop("recognition_hotwords")
         try:
             return cls(**values)
         except (TypeError, ValueError):

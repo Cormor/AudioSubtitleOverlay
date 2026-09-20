@@ -31,6 +31,11 @@ class PipelineOptions:
     model_path: str
     audio_device: str
     translation_backend: str
+    beam_size: int = 1
+    condition_on_previous_text: bool = False
+    temperature_schedule: str = "0"
+    lexicon_mode: str = "关闭"
+    custom_hotwords: str = ""
 
 
 _GPU_DEVICE_MODES = frozenset(("自动（优先GPU）", "NVIDIA GPU（float16）"))
@@ -342,7 +347,15 @@ class LivePipeline:
                 quality_decoded_until = received_samples
                 inference_started = time.perf_counter()
                 try:
-                    result = recognizer.transcribe(buffer, source_language)
+                    result = recognizer.transcribe(
+                        buffer,
+                        source_language,
+                        beam_size=options.beam_size,
+                        condition_on_previous_text=options.condition_on_previous_text,
+                        temperature_schedule=options.temperature_schedule,
+                        lexicon_mode=options.lexicon_mode,
+                        custom_hotwords=options.custom_hotwords,
+                    )
                 except Exception:
                     logging.exception("滚动窗口识别失败，设备=%s", recognizer.actual_device)
                     if not self._stop_event.is_set():

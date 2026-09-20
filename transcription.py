@@ -11,6 +11,7 @@ import numpy as np
 
 from download_manager import DownloadProgress
 from gpu_runtime import configure_gpu_runtime, gpu_runtime_available
+from lexicon import build_hotwords
 from model_manager import (
     ensure_model_available,
     find_local_model,
@@ -18,6 +19,7 @@ from model_manager import (
     model_cache_hint as managed_model_cache_hint,
 )
 from runtime_components import nvidia_driver_available, prepare_component
+from settings import RECOGNITION_BEAM_SIZES
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,23 @@ class RecognitionResult:
     text: str
     language: str | None
     words: list[RecognizedWord] = field(default_factory=list)
+
+
+def _temperature_values(value: str | tuple[float, ...] | list[float]) -> tuple[float, ...]:
+    """把界面保存的温度序列转换为 faster-whisper 可接受的数值。"""
+    if isinstance(value, (tuple, list)):
+        raw_values = value
+    else:
+        raw_values = value.split(",")
+    temperatures = []
+    for raw_value in raw_values:
+        try:
+            temperature = min(1.0, max(0.0, float(raw_value)))
+        except (TypeError, ValueError):
+            continue
+        if temperature not in temperatures:
+            temperatures.append(temperature)
+    return tuple(temperatures) or (0.0,)
 
 
 class WhisperRecognizer:
@@ -149,33 +168,45 @@ class WhisperRecognizer:
         audio: np.ndarray,
         source_language: str | None,
         realtime: bool = False,
+        beam_size: int = 1,
+        condition_on_previous_text: bool = False,
+        temperature_schedule: str | tuple[float, ...] | list[float] = "0",
+        lexicon_mode: str = "关闭",
+        custom_hotwords: str = "",
     ) -> RecognitionResult:
         """识别一段 16 kHz 单声道浮点音频。"""
         if self._model is None:
             raise RuntimeError("语音模型尚未加载")
         language = source_language or None
+        selected_beam_size = (
+            beam_size if beam_size in RECOGNITION_BEAM_SIZES else RECOGNITION_BEAM_SIZES[0]
+        )
+        temperatures = _temperature_values(temperature_schedule)
+        hotwords = build_hotwords(lexicon_mode, custom_hotwords)
         if realtime:
-            # 即时草稿只负责尽快显示当前文字，质量通道负责词时间、标点和稳定修订。
+            # 即时草稿只负责尽快显示当前文字；完整识别负责词时间、标点和更准确的结果。
             transcribe_options = {
-                "beam_size": 1,
-                "best_of": 1,
-                "temperature": 0,
-                "condition_on_previous_text": False,
+                "beam_size": selected_beam_size,
+                "best_of": selected_beam_size,
+                "temperature": temperatures,
+                "condition_on_previous_text": condition_on_previous_text,
                 "vad_filter": False,
                 "word_timestamps": False,
                 "without_timestamps": True,
             }
         else:
             transcribe_options = {
-                # 单候选解码减少搜索开销，继续保留词时间与标点。
-                "beam_size": 1,
-                "best_of": 1,
-                "temperature": 0,
-                "condition_on_previous_text": False,
+                # 搜索范围、前文使用方式和温度序列由界面配置，仍保留词时间与标点。
+                "beam_size": selected_beam_size,
+                "best_of": selected_beam_size,
+                "temperature": temperatures,
+                "condition_on_previous_text": condition_on_previous_text,
                 "vad_filter": True,
                 "word_timestamps": True,
                 "vad_parameters": {"min_silence_duration_ms": 400},
             }
+        if hotwords:
+            transcribe_options["hotwords"] = hotwords
         segments, info = self._model.transcribe(
             audio,
             language=language,

@@ -18,6 +18,9 @@
   的许可证以对应发布版本中携带的 LICENSE、NOTICE 或元数据为准。
 - NVIDIA CUDA 12 用户态运行库：由组件清单按固定版本和 SHA256 下载；其
   许可证、版权声明和再分发条件以对应 NVIDIA/PyPI 发布包为准。
+- 识别提示词表：`assets/lexicon` 中的日常、游戏和计算机词表来自
+  Cassotis Lexicon 与 THUOCL；来源提交、许可证和整理脚本见
+  `assets/lexicon/NOTICE.md`。
 
 ## 发布时的保留要求
 

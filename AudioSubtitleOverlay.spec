@@ -2,7 +2,10 @@
 from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('component_manifest.json', '.')]
+datas = [
+    ('component_manifest.json', '.'),
+    ('assets/lexicon', 'assets/lexicon'),
+]
 binaries = []
 hiddenimports = []
 hiddenimports += collect_submodules('soundcard')
