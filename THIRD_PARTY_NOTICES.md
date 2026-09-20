@@ -13,15 +13,14 @@
   <https://huggingface.co/Systran/faster-whisper-tiny>，当前固定提交为
   `d90ca5fe260221311c53c58e660288d3deb8d356`。模型仓库的许可证和模型卡
   以该来源仓库为准。
-- `numpy`、`soundcard`、`requests`、`pyinstaller`、`Pillow`、`opencc`
-  以及可选的 `argostranslate`：版本范围位于 requirements 文件；每个包
-  的许可证以对应发布版本中携带的 LICENSE、NOTICE 或元数据为准。
+- `numpy`、`soundcard`、`requests`、`pyinstaller`、`Pillow`、`opencc` 和
+  `sentencepiece`：版本范围位于 requirements 文件；每个包的许可证以对应
+  发布版本中携带的 LICENSE、NOTICE 或元数据为准。
+- 本地翻译模型：按语言对从
+  <https://github.com/argosopentech/argospm-index> 按需下载；模型包中的
+  说明和许可证适用于对应模型。
 - NVIDIA CUDA 12 用户态运行库：由组件清单按固定版本和 SHA256 下载；其
   许可证、版权声明和再分发条件以对应 NVIDIA/PyPI 发布包为准。
-- 识别提示词表：`assets/lexicon` 中的日常、游戏和计算机词表来自
-  Cassotis Lexicon 与 THUOCL；来源提交、许可证和整理脚本见
-  `assets/lexicon/NOTICE.md`。
-
 ## 发布时的保留要求
 
 重新打包或发布包含第三方组件的版本时，不得删除第三方许可证和版权声明。

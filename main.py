@@ -22,7 +22,6 @@ from overlay import OverlayWindow
 from pipeline import LivePipeline, PipelineOptions
 from settings import (
     RECOGNITION_BEAM_SIZES,
-    RECOGNITION_LEXICON_OPTIONS,
     Settings,
     application_data_dir,
 )
@@ -102,8 +101,6 @@ class Application:
         self.temperature_var = tk.StringVar(
             value=_TEMPERATURE_LABELS.get(temperature_value, _TEMPERATURE_LABELS["0"])
         )
-        self.lexicon_var = tk.StringVar(value=self.settings.recognition_lexicon)
-        self.custom_hotwords_var = tk.StringVar(value=self.settings.recognition_hotwords)
         self.model_path_var = tk.StringVar(value=self.settings.model_path)
         self.audio_device_var = tk.StringVar(value=self.settings.loopback_device)
         self.audio_default_var = tk.StringVar(value="Windows 默认播放：读取中……")
@@ -259,37 +256,6 @@ class Application:
         self._add_labeled_combo(
             quality_frame,
             2,
-            "识别词表",
-            self.lexicon_var,
-            list(RECOGNITION_LEXICON_OPTIONS),
-            width=24,
-        )
-        ttk.Label(
-            quality_frame,
-            text="只提示少量专有术语；自定义术语优先。",
-            foreground="#5c6773",
-        ).grid(row=2, column=2, padx=(10, 0), pady=5, sticky="w")
-        ttk.Label(quality_frame, text="自定义术语").grid(
-            row=3, column=0, padx=(0, 8), pady=5, sticky="w"
-        )
-        self.custom_hotwords_entry = ttk.Entry(
-            quality_frame,
-            textvariable=self.custom_hotwords_var,
-            width=52,
-        )
-        self.custom_hotwords_entry.grid(
-            row=3, column=1, columnspan=2, pady=5, sticky="ew"
-        )
-        self.custom_hotwords_entry.bind("<Return>", self._queue_live_configuration)
-        self.custom_hotwords_entry.bind("<FocusOut>", self._queue_live_configuration)
-        ttk.Label(
-            quality_frame,
-            text="填写人名、游戏名或专有名词，使用空格或逗号分隔。",
-            foreground="#5c6773",
-        ).grid(row=4, column=1, columnspan=2, sticky="w")
-        self._add_labeled_combo(
-            quality_frame,
-            5,
             "解码回退",
             self.temperature_var,
             list(_TEMPERATURE_LABELS.values()),
@@ -299,7 +265,7 @@ class Application:
             quality_frame,
             text="遇到低概率或重复结果时再尝试备用温度，可能增加耗时。",
             foreground="#5c6773",
-        ).grid(row=5, column=2, padx=(10, 0), pady=5, sticky="w")
+        ).grid(row=2, column=2, padx=(10, 0), pady=5, sticky="w")
         quality_frame.columnconfigure(1, weight=1)
 
         translation_frame = ttk.LabelFrame(container, text="翻译", padding=12)
@@ -309,12 +275,12 @@ class Application:
             0,
             "翻译后端",
             self.translation_var,
-            ["本地优先，失败转在线", "仅使用本地 Argos", "仅使用免费在线 MyMemory"],
+            ["本地优先，失败转在线", "仅使用本地翻译", "仅使用免费在线 MyMemory"],
             width=32,
         )
         ttk.Label(
             translation_frame,
-            text="本地翻译需要另行安装 Argos 语言包；在线后端会把识别文本发送到公共接口。",
+            text="本地翻译首次使用时会下载所需语言模型；下载后可离线使用。在线后端会把识别文本发送到公共接口。",
             foreground="#5c6773",
         ).grid(row=1, column=1, columnspan=2, sticky="w", pady=(6, 0))
 
@@ -373,8 +339,6 @@ class Application:
             self.beam_size_var,
             self.context_var,
             self.temperature_var,
-            self.lexicon_var,
-            self.custom_hotwords_var,
             self.translation_var,
         ):
             variable.trace_add("write", self._queue_live_configuration)
@@ -692,8 +656,6 @@ class Application:
             temperature_schedule=_TEMPERATURE_VALUES_BY_LABEL.get(
                 self.temperature_var.get(), "0"
             ),
-            lexicon_mode=self.lexicon_var.get(),
-            custom_hotwords=self.custom_hotwords_var.get(),
         )
 
     def _queue_live_configuration(self, *_args) -> None:
@@ -853,8 +815,6 @@ class Application:
         self.settings.recognition_temperature_schedule = _TEMPERATURE_VALUES_BY_LABEL.get(
             self.temperature_var.get(), "0"
         )
-        self.settings.recognition_lexicon = self.lexicon_var.get()
-        self.settings.recognition_hotwords = self.custom_hotwords_var.get()
         self.settings.model_path = self.model_path_var.get()
         self.settings.loopback_device = self.audio_device_var.get()
         self.settings.translation_backend = self.translation_var.get()

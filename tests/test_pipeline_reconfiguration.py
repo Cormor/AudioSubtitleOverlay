@@ -106,7 +106,7 @@ class _RecordingRecognizer(_FakeRecognizer):
 class _FakeTranslationService:
     calls: list[tuple[str, str | None, str]] = []
 
-    def __init__(self, _backend: str) -> None:
+    def __init__(self, _backend: str, on_status=None) -> None:
         pass
 
     def translate(self, text: str, _source: str | None, _target: str) -> str:
@@ -305,8 +305,6 @@ class PipelineReconfigurationTests(unittest.TestCase):
                     beam_size=5,
                     condition_on_previous_text=True,
                     temperature_schedule="0,0.2,0.4",
-                    lexicon_mode="计算机",
-                    custom_hotwords="项目专名",
                 )
             )
             deadline = time.monotonic() + 3
@@ -324,8 +322,6 @@ class PipelineReconfigurationTests(unittest.TestCase):
             _FakeRecognizer.instances[0].decode_options[-1]["temperature_schedule"],
             "0,0.2,0.4",
         )
-        self.assertEqual(_FakeRecognizer.instances[0].decode_options[-1]["lexicon_mode"], "计算机")
-        self.assertEqual(_FakeRecognizer.instances[0].decode_options[-1]["custom_hotwords"], "项目专名")
         self.assertEqual(errors, [])
 
     def test_failed_model_change_waits_for_another_configuration(self):

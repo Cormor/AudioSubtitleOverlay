@@ -34,8 +34,6 @@ class PipelineOptions:
     beam_size: int = 1
     condition_on_previous_text: bool = False
     temperature_schedule: str = "0"
-    lexicon_mode: str = "关闭"
-    custom_hotwords: str = ""
 
 
 _GPU_DEVICE_MODES = frozenset(("自动（优先GPU）", "NVIDIA GPU（float16）"))
@@ -351,8 +349,6 @@ class LivePipeline:
                         beam_size=options.beam_size,
                         condition_on_previous_text=options.condition_on_previous_text,
                         temperature_schedule=options.temperature_schedule,
-                        lexicon_mode=options.lexicon_mode,
-                        custom_hotwords=options.custom_hotwords,
                     )
                 except Exception:
                     logging.exception("滚动窗口识别失败，设备=%s", recognizer.actual_device)
@@ -487,12 +483,15 @@ class LivePipeline:
                     translation_backend,
                 ) = self._pending_translations.pop(block_id)
             try:
-                service = TranslationService(translation_backend)
+                service = TranslationService(
+                    translation_backend,
+                    on_status=self._on_status,
+                )
                 translated = service.translate(text, source_language, target_language)
             except Exception as error:
                 if not self._stop_event.is_set():
                     logging.exception("字幕翻译失败")
-                    self._on_error("翻译暂不可用；原文识别仍在继续。")
+                    self._on_error(f"翻译暂不可用：{error}；原文识别仍在继续。")
                 continue
             if not self._stop_event.is_set() and self._is_configuration_current(generation):
                 self._on_translation(sequence, translated, target_language)

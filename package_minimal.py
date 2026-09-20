@@ -23,6 +23,7 @@ USAGE_TEXT = """AudioSubtitleOverlay 精简版使用说明
    - GPU运行库：%APPDATA%\\AudioSubtitleOverlay\\runtime\\cuda12
    - 下载断点：%APPDATA%\\AudioSubtitleOverlay\\downloads\\components
 8. 应用会校验组件的文件大小和SHA256；校验不通过的文件不会安装。
+9. 本地翻译首次使用时会按语言对下载模型，保存到 %APPDATA%\\AudioSubtitleOverlay\\translation_models；下载完成后可离线使用。
 """
 
 

@@ -11,7 +11,6 @@ import numpy as np
 
 from download_manager import DownloadProgress
 from gpu_runtime import configure_gpu_runtime, gpu_runtime_available
-from lexicon import build_hotwords
 from model_manager import (
     ensure_model_available,
     find_local_model,
@@ -171,8 +170,6 @@ class WhisperRecognizer:
         beam_size: int = 1,
         condition_on_previous_text: bool = False,
         temperature_schedule: str | tuple[float, ...] | list[float] = "0",
-        lexicon_mode: str = "关闭",
-        custom_hotwords: str = "",
     ) -> RecognitionResult:
         """识别一段 16 kHz 单声道浮点音频。"""
         if self._model is None:
@@ -182,7 +179,6 @@ class WhisperRecognizer:
             beam_size if beam_size in RECOGNITION_BEAM_SIZES else RECOGNITION_BEAM_SIZES[0]
         )
         temperatures = _temperature_values(temperature_schedule)
-        hotwords = build_hotwords(lexicon_mode, custom_hotwords)
         if realtime:
             # 即时草稿只负责尽快显示当前文字；完整识别负责词时间、标点和更准确的结果。
             transcribe_options = {
@@ -205,8 +201,6 @@ class WhisperRecognizer:
                 "word_timestamps": True,
                 "vad_parameters": {"min_silence_duration_ms": 400},
             }
-        if hotwords:
-            transcribe_options["hotwords"] = hotwords
         segments, info = self._model.transcribe(
             audio,
             language=language,

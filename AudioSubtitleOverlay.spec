@@ -4,7 +4,6 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [
     ('component_manifest.json', '.'),
-    ('assets/lexicon', 'assets/lexicon'),
 ]
 binaries = []
 hiddenimports = []
@@ -16,6 +15,8 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('opencc')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('huggingface_hub')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('sentencepiece')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 

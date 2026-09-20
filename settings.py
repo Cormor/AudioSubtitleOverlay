@@ -10,12 +10,6 @@ from pathlib import Path
 
 RECOGNITION_BEAM_SIZES = (1, 3, 5)
 RECOGNITION_TEMPERATURE_SCHEDULES = ("0", "0,0.2,0.4")
-RECOGNITION_LEXICON_OPTIONS = (
-    "关闭",
-    "游戏",
-    "计算机",
-    "游戏、计算机",
-)
 
 
 def application_data_dir() -> Path:
@@ -40,8 +34,6 @@ class Settings:
     recognition_beam_size: int = 1
     recognition_condition_on_previous_text: bool = False
     recognition_temperature_schedule: str = "0"
-    recognition_lexicon: str = "关闭"
-    recognition_hotwords: str = ""
     model_path: str = ""
     loopback_device: str = ""
     translation_backend: str = "本地优先，失败转在线"
@@ -70,6 +62,8 @@ class Settings:
             return cls()
         allowed = {field.name for field in fields(cls)}
         values = {key: value for key, value in payload.items() if key in allowed}
+        if values.get("translation_backend") == "仅使用本地 Argos":
+            values["translation_backend"] = "仅使用本地翻译"
         # 兼容旧版本只保存一个整体透明度的配置文件。
         if "overlay_background_opacity" not in values and "overlay_opacity" in payload:
             values["overlay_background_opacity"] = payload["overlay_opacity"]
@@ -99,10 +93,6 @@ class Settings:
             "recognition_temperature_schedule"
         ] not in RECOGNITION_TEMPERATURE_SCHEDULES:
             values.pop("recognition_temperature_schedule")
-        if "recognition_lexicon" in values and values["recognition_lexicon"] not in RECOGNITION_LEXICON_OPTIONS:
-            values.pop("recognition_lexicon")
-        if "recognition_hotwords" in values and not isinstance(values["recognition_hotwords"], str):
-            values.pop("recognition_hotwords")
         try:
             return cls(**values)
         except (TypeError, ValueError):

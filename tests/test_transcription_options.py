@@ -32,8 +32,6 @@ class TranscriptionOptionTests(unittest.TestCase):
             beam_size=5,
             condition_on_previous_text=True,
             temperature_schedule="0,0.2,0.4",
-            lexicon_mode="计算机",
-            custom_hotwords="项目专名",
         )
 
         self.assertEqual(result.text, "测试")
@@ -41,7 +39,7 @@ class TranscriptionOptionTests(unittest.TestCase):
         self.assertEqual(model.options["best_of"], 5)
         self.assertEqual(model.options["temperature"], (0.0, 0.2, 0.4))
         self.assertTrue(model.options["condition_on_previous_text"])
-        self.assertTrue(model.options["hotwords"].startswith("项目专名"))
+        self.assertNotIn("hotwords", model.options)
 
 
 if __name__ == "__main__":
