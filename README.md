@@ -27,8 +27,8 @@ AudioSubtitleOverlay 是 Windows 桌面悬浮字幕应用，可识别系统播�
 
 ### 发布文件
 
-- `AudioSubtitleOverlay_Portable_20260920.zip`：主程序，约 110 MiB。
-- `AudioSubtitleOverlay_tiny_model_20260920.zip`：可选 tiny 模型包，约 67 MiB。
+- `AudioSubtitleOverlay_Portable_v1.1.0.zip`：主程序，约 110 MiB。
+- `AudioSubtitleOverlay_tiny_model_v1.1.0.zip`：可选 tiny 模型包，约 67 MiB。
 - `SHA256SUMS.txt`：发布文件校验值。
 
 ## English

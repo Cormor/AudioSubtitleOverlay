@@ -1,32 +1,47 @@
 # AudioSubtitleOverlay {{VERSION}}
 
-Windows 系统音频识别与双语字幕悬浮窗。
+Windows 双语字幕悬浮窗，解压后双击运行。
 
-AudioSubtitleOverlay is a Windows desktop overlay for local speech recognition and bilingual subtitles.
+AudioSubtitleOverlay is a Windows bilingual subtitle overlay. Extract the package and double-click the executable.
+
+## 修复与更新 | Fixes and updates
+
+- 修复本地翻译无法正常启动的问题。
+- 本地翻译模型首次使用时自动下载，准备完成后可离线使用。
+- 本地翻译模型加载后在进程内复用，减少重复加载和等待。
+- 优化运行中配置切换，减少不必要的识别模型和运行库检查。
+- 主界面支持上下滚动，较小屏幕也可以查看全部设置。
+- 减少音频积压造成的卡顿和重复字幕。
+
+- Fixed local translation startup.
+- Local translation models are downloaded on first use and work offline after preparation.
+- Loaded translation models are reused within the process.
+- Reduced unnecessary model and runtime checks while changing settings.
+- Added vertical scrolling to the main settings window.
+- Reduced stutter and duplicate subtitles caused by audio backlog.
 
 ## 下载与运行 | Download and run
 
-1. 下载并解压 `AudioSubtitleOverlay_Portable_20260918.zip`。
+1. 下载并解压 `{{MAIN_NAME}}`。
 2. 保留完整的 `AudioSubtitleOverlay` 文件夹及其中的 `_internal` 文件夹。
-3. 需要离线携带 tiny 模型时，将 `AudioSubtitleOverlay_tiny_model_20260918.zip` 解压到同一父目录。
+3. 需要预先携带 tiny 语音模型时，将 `{{TINY_NAME}}` 解压到主程序 ZIP 解压后的同级目录。
 4. 双击 `AudioSubtitleOverlay\AudioSubtitleOverlay.exe`。
 
-主程序包约 106 MiB，不要求目标电脑预装 Python。主程序不内置模型；联网时应用会按需准备模型，也可以使用 tiny 模型包预先准备默认模型。GPU 模式首次使用时可能需要额外准备运行库，CPU 模式不需要该运行库。
+主程序不要求目标电脑预装 Python。语音识别和本地翻译模型按需准备；本地翻译模型准备完成后，对应语言对可以离线使用。GPU 运行库只在选择 GPU 且本机缺少对应组件时按需准备，CPU 模式不需要该运行库。
 
-The main package is about 106 MiB and does not require Python on the target computer. It does not include a speech model; the application can prepare a missing model when network access is available, or the optional tiny-model package can be used for offline distribution. GPU mode may prepare additional runtime components on first use.
+The main package does not require Python on the target computer. Speech and local translation models are prepared as needed. After a local translation model is prepared, that language pair can work offline. GPU runtime components are prepared only when GPU mode is selected and they are missing.
 
 ## 发布文件 | Assets
 
-- `AudioSubtitleOverlay_Portable_20260918.zip`：主程序，约 106 MiB。
-- `AudioSubtitleOverlay_tiny_model_20260918.zip`：可选 tiny 模型包，约 67 MiB。
+- `{{MAIN_NAME}}`：主程序，{{MAIN_SIZE}}。
+- `{{TINY_NAME}}`：可选 tiny 语音模型，{{TINY_SIZE}}。
 - `SHA256SUMS.txt`：发布文件校验值。
 
-[项目主页与源码](https://github.com/Cormor/AudioSubtitleOverlay) · [截图](https://raw.githubusercontent.com/Cormor/AudioSubtitleOverlay/main/docs/screenshots/main-window.png)
+SHA256:
 
-## 许可证 | License
+```text
+{{MAIN_SHA256}}  {{MAIN_NAME}}
+{{TINY_SHA256}}  {{TINY_NAME}}
+```
 
-项目自有代码采用 `AudioSubtitleOverlay Non-Commercial Source-Available License 1.0`。非商业使用默认允许；修改、集成、重新打包或再分发，必须公开完整对应源码和修改说明，或事先取得书面授权；任何商业使用均须事先取得商业授权。第三方组件适用各自的许可条款。
-
-The original code is provided under the `AudioSubtitleOverlay Non-Commercial Source-Available License 1.0`. Non-commercial use is allowed by default. Modifications, integration, repackaging, and redistribution require public corresponding source with change notes or prior written authorization. All commercial use requires prior written authorization. Third-party components remain under their own terms.
-
-完整条款：[`LICENSE`](https://github.com/Cormor/AudioSubtitleOverlay/blob/main/LICENSE) · 商业授权：[`COMMERCIAL-LICENSE.md`](https://github.com/Cormor/AudioSubtitleOverlay/blob/main/COMMERCIAL-LICENSE.md)
+许可证 | License: [`LICENSE`](https://github.com/Cormor/AudioSubtitleOverlay/blob/main/LICENSE)。商业使用及修改、集成、重新打包和再分发请先阅读许可证条款。
