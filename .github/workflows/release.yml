@@ -24,6 +24,15 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: 检查 Release 上传凭据
+        shell: pwsh
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:RELEASE_TOKEN)) {
+            throw "未配置 RELEASE_TOKEN。请在仓库 Actions Secret 中添加具备 Release 写入权限的令牌。"
+          }
+
       - name: 构建 Windows 主程序
         shell: cmd
         run: call build_windows.bat
@@ -94,7 +103,7 @@ jobs:
       - name: 创建或更新 GitHub Release 并上传资产
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           $ErrorActionPreference = "Stop"
           $repo = $env:GITHUB_REPOSITORY
