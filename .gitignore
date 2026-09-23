@@ -8,6 +8,7 @@ __pycache__/
 # PyInstaller和本地构建输出
 build*/
 dist*/
+/AudioSubtitleOverlay/
 *.spec.bak
 
 # 本地模型、GPU wheel和发布压缩包

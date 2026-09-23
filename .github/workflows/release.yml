@@ -11,10 +11,10 @@ permissions:
 jobs:
   build-and-release:
     name: 构建并发布 Windows 便携版
-    if: startsWith(github.event.head_commit.message, '发布 v1.1.0')
+    if: startsWith(github.event.head_commit.message, '发布 v1.2.0')
     runs-on: windows-latest
     env:
-      RELEASE_TAG: v1.1.0
+      RELEASE_TAG: v1.2.0
     steps:
       - name: 检出源码
         uses: actions/checkout@v4
@@ -52,14 +52,14 @@ jobs:
 
           $assetDirectory = "release-assets"
           New-Item -ItemType Directory -Force -Path $assetDirectory | Out-Null
-          $mainName = "AudioSubtitleOverlay_Portable_v1.1.0.zip"
-          $tinyName = "AudioSubtitleOverlay_tiny_model_v1.1.0.zip"
+          $mainName = "AudioSubtitleOverlay_Portable_v1.2.0.zip"
+          $tinyName = "AudioSubtitleOverlay_tiny_model_v1.2.0.zip"
           $mainAsset = Join-Path $assetDirectory $mainName
           $tinyAsset = Join-Path $assetDirectory $tinyName
           Copy-Item $mainSource.FullName $mainAsset -Force
           Copy-Item $tinySource.FullName $tinyAsset -Force
 
-          python -c 'from zipfile import ZipFile; paths=[r"release-assets\AudioSubtitleOverlay_Portable_v1.1.0.zip", r"release-assets\AudioSubtitleOverlay_tiny_model_v1.1.0.zip"]; assert all(ZipFile(path).testzip() is None for path in paths)'
+          python -c 'from zipfile import ZipFile; paths=[r"release-assets\AudioSubtitleOverlay_Portable_v1.2.0.zip", r"release-assets\AudioSubtitleOverlay_tiny_model_v1.2.0.zip"]; assert all(ZipFile(path).testzip() is None for path in paths)'
 
           $mainInfo = Get-Item $mainAsset
           $tinyInfo = Get-Item $tinyAsset
@@ -100,8 +100,8 @@ jobs:
           $repo = $env:GITHUB_REPOSITORY
           $tag = $env:RELEASE_TAG
           $assets = @(
-            "release-assets/AudioSubtitleOverlay_Portable_v1.1.0.zip",
-            "release-assets/AudioSubtitleOverlay_tiny_model_v1.1.0.zip",
+            "release-assets/AudioSubtitleOverlay_Portable_v1.2.0.zip",
+            "release-assets/AudioSubtitleOverlay_tiny_model_v1.2.0.zip",
             "release-assets/SHA256SUMS.txt"
           )
 

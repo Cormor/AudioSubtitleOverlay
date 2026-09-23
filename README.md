@@ -9,6 +9,7 @@
 AudioSubtitleOverlay 是 Windows 桌面悬浮字幕应用，可识别系统播放声音或麦克风输入，并同时显示源文本和译文。
 
 - 支持系统播放回环和麦克风输入。
+- 提供 Beta 音频来源，可尝试自动跟踪正在发声的应用并直接采集该应用声音；需要 Windows 10 build 20348 或更高版本，部分应用可能不支持。
 - 支持运行中切换音频来源、源语言、目标语言、识别模型、计算设备和识别质量参数。
 - 可调整搜索范围、前文参考和解码回退。
 - 本地翻译首次使用时按语言对下载模型，完成后可离线使用；也可选择免费在线翻译。
@@ -27,8 +28,8 @@ AudioSubtitleOverlay 是 Windows 桌面悬浮字幕应用，可识别系统播�
 
 ### 发布文件
 
-- `AudioSubtitleOverlay_Portable_v1.1.0.zip`：主程序，约 110 MiB。
-- `AudioSubtitleOverlay_tiny_model_v1.1.0.zip`：可选 tiny 模型包，约 67 MiB。
+- `AudioSubtitleOverlay_Portable_v1.2.0.zip`：主程序，约 110 MiB。
+- `AudioSubtitleOverlay_tiny_model_v1.2.0.zip`：可选 tiny 模型包，约 67 MiB。
 - `SHA256SUMS.txt`：发布文件校验值。
 
 ## English
@@ -36,6 +37,7 @@ AudioSubtitleOverlay 是 Windows 桌面悬浮字幕应用，可识别系统播�
 AudioSubtitleOverlay is a Windows desktop subtitle overlay. It recognizes system playback or microphone audio locally and displays source text with translation.
 
 - Supports system playback loopback and microphone input.
+- Offers a beta audio source that attempts to follow an app currently producing sound and capture its audio directly. Requires Windows 10 build 20348 or later; some apps may not be supported.
 - Lets users change the audio source, languages, recognition model, compute device, and recognition quality settings while recognition is running.
 - Provides adjustable search range, context use, and decode fallback.
 - Downloads a local translation model for the selected language pair on first use; it can then work offline, or use free online translation instead.

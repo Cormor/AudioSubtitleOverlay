@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import colorchooser, messagebox, ttk
 
 from audio_capture import SystemAudioCapture
+from process_audio_capture import PROCESS_AUDIO_DEVICE
 from display_module import DisplayEvent, DisplayModule
 from subtitle_events import SourceUpdate
 from languages import (
@@ -223,6 +224,11 @@ class Application:
             text="可在“模型管理”中下载或查看本地模型。",
             foreground="#5c6773",
         ).grid(row=6, column=1, columnspan=2, sticky="w")
+        ttk.Label(
+            audio_frame,
+            text="Beta 会尝试跟踪当前有声音的应用；需要 Windows 10 build 20348 或更高版本，部分应用可能不支持。",
+            foreground="#5c6773",
+        ).grid(row=7, column=1, columnspan=2, sticky="w", pady=(2, 0))
         audio_frame.columnconfigure(1, weight=1)
 
         quality_frame = ttk.LabelFrame(container, text="识别质量", padding=12)
@@ -478,28 +484,36 @@ class Application:
 
     def _refresh_devices(self) -> None:
         try:
-            devices = SystemAudioCapture.list_audio_devices()
-            if not devices:
-                raise RuntimeError("没有发现可用的音频输入或播放回环设备。")
-            self.audio_combo["values"] = devices
+            try:
+                devices = SystemAudioCapture.list_audio_devices()
+            except Exception as error:
+                devices = []
+                logging.warning("枚举系统音频设备失败：%s", error)
+            choices = [*devices, PROCESS_AUDIO_DEVICE]
+            self.audio_combo["values"] = choices
             self.audio_combo.configure(state="readonly")
-            default_raw = SystemAudioCapture.default_loopback_device()
+            try:
+                default_raw = SystemAudioCapture.default_loopback_device()
+            except Exception as error:
+                default_raw = ""
+                logging.warning("读取 Windows 默认播放设备失败：%s", error)
             default_name = f"系统播放：{default_raw}" if default_raw else ""
             current = self.audio_device_var.get()
-            if current not in devices:
+            if current not in choices:
                 compatible_name = f"系统播放：{current}"
                 self.audio_device_var.set(
-                    compatible_name
-                    if current and compatible_name in devices
-                    else default_name
-                    if default_name in devices
-                    else devices[0]
+                    compatible_name if current and compatible_name in choices
+                    else default_name if default_name in choices
+                    else devices[0] if devices
+                    else current
                 )
-            selected = self.audio_device_var.get()
             self.audio_default_var.set(
                 f"Windows 默认播放：{default_raw or '未读取'}"
             )
-            self._set_status("准备就绪")
+            self._set_status(
+                "准备就绪" if devices
+                else "普通音频设备未读取；仍可尝试 Beta 自动跟踪模式。"
+            )
         except Exception as error:
             self.audio_combo.configure(state="readonly")
             self.audio_default_var.set(f"Windows 默认播放：读取失败（{error}）")

@@ -13,6 +13,7 @@ from typing import Callable
 import numpy as np
 
 from audio_capture import SystemAudioCapture
+from process_audio_capture import PROCESS_AUDIO_DEVICE, ProcessAudioCapture
 from transcription import WhisperRecognizer
 from rolling_transcript import RollingTranscript
 from translation import TranslationService
@@ -97,7 +98,7 @@ class LivePipeline:
         self._configuration_queue: queue.Queue[PipelineOptions] = queue.Queue()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self._capture: SystemAudioCapture | None = None
+        self._capture: SystemAudioCapture | ProcessAudioCapture | None = None
         self._lock = threading.Lock()
         self._stopped_callback_lock = threading.Lock()
         self._stopped_callback_sent = False
@@ -186,7 +187,7 @@ class LivePipeline:
                 return
 
     def _run(self) -> None:
-        capture: SystemAudioCapture | None = None
+        capture: SystemAudioCapture | ProcessAudioCapture | None = None
         recognizer: WhisperRecognizer | None = None
         active_options: PipelineOptions | None = None
         active_generation = -1
@@ -276,13 +277,19 @@ class LivePipeline:
                     last_audio_status_at = time.monotonic()
                     if capture is None:
                         self._on_status("正在连接音频设备……")
-                        capture = SystemAudioCapture(options.audio_device)
+                        capture = (
+                            ProcessAudioCapture(options.audio_device)
+                            if options.audio_device == PROCESS_AUDIO_DEVICE
+                            else SystemAudioCapture(options.audio_device)
+                        )
                         self._capture = capture
                         capture.start(
                             self._on_audio,
                             self._on_capture_error,
-                            on_ready=lambda name: self._on_status(
-                                f"正在识别；已打开采集设备：{name}"
+                            on_ready=lambda name, active_capture=capture: self._on_status(
+                                name
+                                if isinstance(active_capture, ProcessAudioCapture)
+                                else f"正在识别；已打开采集设备：{name}"
                             ),
                         )
                     continue
@@ -291,7 +298,11 @@ class LivePipeline:
                     frames, error, received_at = self._queue.get(timeout=0.2)
                 except queue.Empty:
                     now = time.monotonic()
-                    if received_samples == 0 and now - last_audio_status_at >= 3:
+                    if (
+                        received_samples == 0
+                        and not isinstance(capture, ProcessAudioCapture)
+                        and now - last_audio_status_at >= 3
+                    ):
                         self._on_status("尚未收到输入音频")
                         last_audio_status_at = now
                     continue

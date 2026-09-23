@@ -24,12 +24,17 @@ USAGE_TEXT = """AudioSubtitleOverlay 精简版使用说明
    - 下载断点：%APPDATA%\\AudioSubtitleOverlay\\downloads\\components
 8. 应用会校验组件的文件大小和SHA256；校验不通过的文件不会安装。
 9. 本地翻译首次使用时会按语言对下载模型，保存到 %APPDATA%\\AudioSubtitleOverlay\\translation_models；下载完成后可离线使用。
+10. 可在“音频来源”中选择 Beta 自动跟踪正在发声的应用；需要 Windows 10 build 20348 或更高版本，部分应用可能不支持。
 """
 
 
 def _iter_files(source: Path):
     """按稳定顺序枚举需要写入压缩包的文件。"""
-    yield from sorted((item for item in source.rglob("*") if item.is_file()), key=lambda item: item.as_posix())
+    for item in sorted((item for item in source.rglob("*") if item.is_file()), key=lambda item: item.as_posix()):
+        # 使用包内说明替换构建目录可能残留的旧说明，避免ZIP出现重名条目。
+        if item.relative_to(source).as_posix() == "使用说明.txt":
+            continue
+        yield item
 
 
 def build_archive(source: Path, output: Path) -> None:
@@ -52,6 +57,11 @@ def build_archive(source: Path, output: Path) -> None:
         for path in _iter_files(source):
             archive.write(path, Path("AudioSubtitleOverlay") / path.relative_to(source))
         archive.writestr("AudioSubtitleOverlay/使用说明.txt", USAGE_TEXT)
+        version_file = Path(__file__).resolve().with_name("VERSION")
+        version = version_file.read_text(encoding="utf-8").strip()
+        if not version:
+            raise ValueError(f"版本文件为空：{version_file}")
+        archive.writestr("AudioSubtitleOverlay/版本.txt", f"版本：v{version}\n")
 
 
 def main() -> int:
