@@ -73,6 +73,8 @@ class LivePipeline:
     gpu_quality_update_samples = 1_600
     # CPU 单次推理可能超过 500 ms，不启动即时通道，避免队列持续积压。
     cpu_quality_update_samples = 8_000
+    # 相同翻译错误的上报间隔；连续失败不刷屏，也不冲垮日志。
+    translation_error_interval = 60.0
 
     def __init__(
         self,
@@ -108,6 +110,8 @@ class LivePipeline:
         self._translation_sequence = 0
         self._pending_translations = {}
         self._translation_running = False
+        self._translation_failures = 0
+        self._last_translation_error_at = 0.0
         self._translation_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="翻译")
 
     def start(self) -> None:
@@ -500,9 +504,20 @@ class LivePipeline:
                 )
                 translated = service.translate(text, source_language, target_language)
             except Exception as error:
+                self._translation_failures += 1
+                now = time.monotonic()
                 if not self._stop_event.is_set():
-                    logging.exception("字幕翻译失败")
-                    self._on_error(f"翻译暂不可用：{error}；原文识别仍在继续。")
+                    if now - self._last_translation_error_at >= self.translation_error_interval:
+                        self._last_translation_error_at = now
+                        logging.exception(
+                            "字幕翻译失败（连续第 %s 次；同类错误每 %s 秒至多上报一次）",
+                            self._translation_failures,
+                            int(self.translation_error_interval),
+                        )
+                        self._on_error(f"翻译暂不可用：{error}；原文识别仍在继续。")
+                    else:
+                        logging.debug("字幕翻译失败（节流中）：%s", error)
                 continue
+            self._translation_failures = 0
             if not self._stop_event.is_set() and self._is_configuration_current(generation):
                 self._on_translation(sequence, translated, target_language)

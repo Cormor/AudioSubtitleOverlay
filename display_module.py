@@ -14,10 +14,14 @@ class SubtitleBlock:
     source: str
     translation: str = ""
     language: str | None = None
+    translation_sequence: int = -1
 
 
 class SubtitleHistory:
     """保留稳定字幕并管理当前段的即时草稿。"""
+
+    # 浮窗用于短时回看，不作为完整会话存档。
+    max_blocks = 64
 
     def __init__(self):
         self.blocks: dict[int, SubtitleBlock] = {}
@@ -50,9 +54,18 @@ class SubtitleHistory:
             # 同一段发生质量修订时，新序号的译文优先于旧版本译文。
             translation = pending_translation
         else:
-            translation = previous.translation if previous else ""
-        self.blocks[block_id] = SubtitleBlock(sequence, text, translation, language)
+            translation = previous.translation if previous and text.startswith(previous.source) else ""
+        translation_sequence = sequence if pending_translation is not None or (previous and previous.source == text and translation) else (previous.translation_sequence if previous and translation else -1)
+        self.blocks[block_id] = SubtitleBlock(sequence, text, translation, language, translation_sequence)
         self._sequence_blocks[sequence] = block_id
+        while len(self.blocks) > self.max_blocks:
+            oldest = next(iter(self.blocks))
+            removed = self.blocks.pop(oldest)
+            self._sequence_blocks.pop(removed.sequence, None)
+        self._pending_translations = {
+            seq: value for seq, value in self._pending_translations.items()
+            if seq > sequence
+        }
         # 质量版本覆盖同段草稿，不保留未经确认的旧尾部。
         if self._preview_block_id is not None and block_id >= self._preview_block_id:
             self.clear_preview()
@@ -79,12 +92,17 @@ class SubtitleHistory:
         block_id = self._sequence_blocks.get(sequence)
         if block_id is None:
             # 翻译线程可能先于界面线程的原文事件完成，先暂存，避免译文丢失。
-            self._pending_translations[sequence] = text
+            latest = max(self._sequence_blocks, default=-1)
+            if sequence > latest:
+                self._pending_translations[sequence] = text
+                if len(self._pending_translations) > self.max_blocks:
+                    self._pending_translations.pop(min(self._pending_translations))
             return False
         block = self.blocks[block_id]
-        if block.translation == text:
+        if block.translation == text and block.translation_sequence == sequence:
             return False
         block.translation = text
+        block.translation_sequence = sequence
         return True
 
     def entries(self):
@@ -108,6 +126,13 @@ class SubtitleHistory:
             result.append("preview")
         return result
 
+    def entry_translation_pending(self):
+        result = [bool(block.translation and block.translation_sequence != block.sequence)
+                  for block in self.blocks.values()]
+        if self._preview_block_id is not None and self._preview_block_id not in self.blocks:
+            result.append(False)
+        return result
+
     def latest_source(self) -> str:
         """返回当前应显示的最新原文。"""
         if self._preview_block_id is not None:
@@ -121,7 +146,8 @@ class SubtitleHistory:
         block_id = self._sequence_blocks.get(sequence)
         if block_id is None:
             return ""
-        return self.blocks[block_id].translation
+        block = self.blocks[block_id]
+        return block.translation if block.translation_sequence == sequence else ""
 
 
 @dataclass(frozen=True)
@@ -147,6 +173,8 @@ class DisplaySnapshot:
     detected_language: str | None
     target_language: str
     translation_visible: bool
+    translation_pending: tuple[bool, ...] = ()
+    translation_activity: int = 0
 
 
 class DisplayModule:
@@ -154,6 +182,7 @@ class DisplayModule:
 
     def __init__(self, source_language: str | None, target_language: str) -> None:
         self.history = SubtitleHistory()
+        self._translation_activity = 0
         self._source_language = source_language
         self._target_language = target_language
         self._detected_language: str | None = None
@@ -186,8 +215,8 @@ class DisplayModule:
         return display_text(normalized, language).strip(" \t")
 
     def _translation_visible(self) -> bool:
-        source = self._source_language or self._detected_language
-        return source != self._target_language
+        # 自动检测会在混合语言和短音频中反复变化，不随单次检测拆掉译文区。
+        return self._source_language is None or self._source_language != self._target_language
 
     def _mark_dirty(self) -> None:
         self._dirty = True
@@ -281,6 +310,9 @@ class DisplayModule:
             self._latest_translation = attached_translation
             self._latest_translation_sequence = sequence
             translation_changed = True
+        if not attached_translation and self._latest_translation:
+            self._latest_translation = ""
+            translation_changed = True
         self._latest_source_text = self.history.latest_source()
         if history_changed or language_changed or translation_changed:
             self._mark_dirty()
@@ -326,17 +358,22 @@ class DisplayModule:
         normalized = self._normalize_text(text, language)
         if not normalized:
             return False
+        pending_before = self.history._pending_translations.get(sequence)
         history_changed = self.history.update_translation(sequence, normalized)
+        pending_output = (self.history._pending_translations.get(sequence) == normalized
+                          and pending_before != normalized)
         latest_changed = False
         if (
             history_changed
+            and sequence >= self._latest_source_sequence
             and sequence >= self._latest_translation_sequence
             and normalized != self._latest_translation
         ):
             self._latest_translation = normalized
             self._latest_translation_sequence = sequence
             latest_changed = True
-        if history_changed or latest_changed:
+        if history_changed or latest_changed or pending_output:
+            self._translation_activity += 1
             self._mark_dirty()
         return history_changed or latest_changed
 
@@ -346,12 +383,14 @@ class DisplayModule:
         return DisplaySnapshot(
             entries=entries,
             revision_modes=tuple(self.history.entry_modes()),
+            translation_pending=tuple(self.history.entry_translation_pending()),
             latest_source=self._latest_source_text,
             latest_translation=self._latest_translation,
             source_language=self._source_language,
             detected_language=self._detected_language,
             target_language=self._target_language,
             translation_visible=self._translation_visible(),
+            translation_activity=self._translation_activity,
         )
 
     def take_snapshot(self) -> DisplaySnapshot | None:

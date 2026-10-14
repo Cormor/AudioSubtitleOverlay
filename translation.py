@@ -45,6 +45,9 @@ class _LoadedTranslationModel:
 
 _package_index_lock = threading.Lock()
 _package_index: tuple[dict, ...] | None = None
+_package_index_failed_at = 0.0
+# 清单读取失败后的退避时间；避免每个字幕段都去撞一次网络。
+PACKAGE_INDEX_RETRY_SECONDS = 300.0
 _translation_manager_lock = threading.Lock()
 _translation_manager: DownloadManager | None = None
 _loaded_models_lock = threading.Lock()
@@ -74,12 +77,32 @@ def _translation_download_manager() -> DownloadManager:
         return _translation_manager
 
 
+def _package_index_cache_path() -> Path:
+    """返回语言模型清单的本地缓存路径，供离线时使用。"""
+    return _translation_download_root() / "index.json"
+
+
+def _read_cached_package_index() -> tuple[dict, ...] | None:
+    try:
+        payload = json.loads(_package_index_cache_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, list):
+        return None
+    return tuple(item for item in payload if isinstance(item, dict))
+
+
 def _load_package_index() -> tuple[dict, ...]:
-    """读取语言模型清单；单次运行只读取一次。"""
-    global _package_index
+    """读取语言模型清单：成功后落盘缓存，离线时回退缓存，失败按退避重试。"""
+    global _package_index, _package_index_failed_at
     with _package_index_lock:
         if _package_index is not None:
             return _package_index
+        if (
+            _package_index_failed_at
+            and time.monotonic() - _package_index_failed_at < PACKAGE_INDEX_RETRY_SECONDS
+        ):
+            raise RuntimeError("本地翻译模型清单近期读取失败，请稍后重试或检查网络连接。")
         request = Request(
             ARGOS_PACKAGE_INDEX,
             headers={"User-Agent": "AudioSubtitleOverlay/1.0"},
@@ -89,15 +112,42 @@ def _load_package_index() -> tuple[dict, ...]:
             with urlopen(request, timeout=20) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except Exception as error:
+            cached = _read_cached_package_index()
+            if cached is not None:
+                LOGGER.warning("语言模型清单读取失败，改用本地缓存：%s", error)
+                _package_index = cached
+                return _package_index
+            _package_index_failed_at = time.monotonic()
             raise RuntimeError("无法读取本地翻译模型清单，请检查网络连接。") from error
         if not isinstance(payload, list):
             raise RuntimeError("本地翻译模型清单格式不正确。")
         _package_index = tuple(item for item in payload if isinstance(item, dict))
+        try:
+            _package_index_cache_path().write_text(
+                json.dumps(payload, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError:
+            LOGGER.warning("无法写入语言模型清单缓存：%s", _package_index_cache_path())
         return _package_index
 
 
+def _find_installed_model(from_code: str, to_code: str) -> Path | None:
+    """在安装目录中查找已下载的语言模型，完全不依赖网络清单。"""
+    pair_dir = _translation_model_root() / f"{from_code}_{to_code}"
+    return _find_model_root(pair_dir, from_code, to_code)
+
+
 def _find_package(from_code: str, to_code: str) -> TranslationPackage | None:
-    """查找指定方向的可下载模型包。"""
+    """查找指定方向的模型包；已安装的模型优先，离线也能定位。"""
+    if _find_installed_model(from_code, to_code) is not None:
+        return TranslationPackage(
+            from_code=from_code,
+            to_code=to_code,
+            package_code=f"translate-{from_code}_{to_code}",
+            package_version="installed",
+            urls=(),
+        )
     for item in _load_package_index():
         if item.get("from_code") != from_code or item.get("to_code") != to_code:
             continue
@@ -219,11 +269,15 @@ class ArgosTranslator:
         return translated
 
     def _ensure_model(self, package: TranslationPackage) -> Path:
-        """首次使用时下载并安装语言模型。"""
-        spec = _build_package_spec(package)
-        existing = _find_model_root(spec.target_dir, package.from_code, package.to_code)
+        """首次使用时下载并安装语言模型；已安装的模型直接复用。"""
+        existing = _find_installed_model(package.from_code, package.to_code)
         if existing is not None:
             return existing
+        if not package.urls:
+            raise RuntimeError(
+                f"本地翻译模型 {package.from_code}->{package.to_code} 尚未安装，且当前无法联网下载。"
+            )
+        spec = _build_package_spec(package)
         self._notify_status(
             f"正在准备本地翻译模型：{package.from_code}→{package.to_code}，首次使用需要下载。"
         )

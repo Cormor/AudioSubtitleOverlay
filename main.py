@@ -407,6 +407,20 @@ class Application:
             command=self._apply_overlay_settings,
             variable=self._topmost_var,
         ).grid(row=0, column=5, padx=(0, 8), pady=4, sticky="w")
+        self._auto_height_var = tk.BooleanVar(value=self.settings.overlay_auto_height)
+        ttk.Checkbutton(
+            parent,
+            text="自动收起空译文区",
+            command=self._apply_overlay_settings,
+            variable=self._auto_height_var,
+        ).grid(row=0, column=6, padx=(0, 8), pady=4, sticky="w")
+        self._animation_var = tk.BooleanVar(value=self.settings.overlay_animation)
+        ttk.Checkbutton(
+            parent,
+            text="过渡动效",
+            command=self._apply_overlay_settings,
+            variable=self._animation_var,
+        ).grid(row=0, column=7, padx=(0, 8), pady=4, sticky="w")
         ttk.Label(parent, text="原文字大小").grid(row=1, column=0, sticky="w", pady=4)
         self.font_scale = ttk.Scale(
             parent,
@@ -604,8 +618,10 @@ class Application:
                 "字幕窗口已提交：序号=%s，段落=%s，音频终点=%.3f秒，耗时=%s",
                 update.sequence, block_id, update.audio_end, measurements,
             )
-        # 未进入可见区域的中间结果不算上屏，也不长期保留计时记录。
-        self._pending_presentations.clear()
+        # 阅读停留期间末尾可能尚未进入视口，不能拿旧的可见前缀冒充新结果。
+        # 每段只保留最新版本；离开有界历史的段落才丢弃记录。
+        for block_id in set(self._pending_presentations) - set(self._history.blocks):
+            self._pending_presentations.pop(block_id, None)
 
     def _show_source(
         self,
@@ -769,7 +785,7 @@ class Application:
         self.scroll_interval_var.set(str(milliseconds))
         if hasattr(self, "overlay"):
             self.overlay._cancel_auto_scroll()
-            self.overlay._schedule_auto_scroll()
+            self.overlay.apply_settings()
 
     def _font_scale_changed(self, value) -> None:
         self.settings.overlay_font_size = int(float(value))
@@ -794,6 +810,10 @@ class Application:
     def _apply_overlay_settings(self) -> None:
         if hasattr(self, "_topmost_var"):
             self.settings.overlay_topmost = self._topmost_var.get()
+        if hasattr(self, "_auto_height_var"):
+            self.settings.overlay_auto_height = self._auto_height_var.get()
+        if hasattr(self, "_animation_var"):
+            self.settings.overlay_animation = self._animation_var.get()
         if hasattr(self, "overlay"):
             self.overlay.apply_settings()
 
@@ -833,7 +853,7 @@ class Application:
         self.settings.loopback_device = self.audio_device_var.get()
         self.settings.translation_backend = self.translation_var.get()
         if hasattr(self, "overlay"):
-            self.settings.overlay_geometry = self.overlay.window.geometry()
+            self.overlay.persist_geometry()
         self.settings.save()
         self._set_status("设置已保存。")
 
@@ -877,7 +897,12 @@ class Application:
         self.translation_display_var.set(snapshot.latest_translation or "等待翻译")
         self._apply_translation_visibility(snapshot.translation_visible)
         self.overlay.set_translation_visible(snapshot.translation_visible)
-        self.overlay.set_entries(snapshot.entries, snapshot.revision_modes)
+        self.overlay.set_translation_context(
+            snapshot.source_language or snapshot.detected_language, snapshot.target_language,
+            automatic=snapshot.source_language is None,
+            translation_activity=snapshot.translation_activity,
+        )
+        self.overlay.set_entries(snapshot.entries, snapshot.revision_modes, snapshot.translation_pending)
 
     def close(self) -> None:
         if self._closing:

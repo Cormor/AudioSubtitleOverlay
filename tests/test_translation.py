@@ -105,5 +105,101 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual([(item[0], item[1]) for item in pairs], [("ja", "en"), ("en", "zh")])
 
 
+class OfflineModelTests(unittest.TestCase):
+    def setUp(self):
+        translation._package_index = None
+        translation._package_index_failed_at = 0.0
+
+    def tearDown(self):
+        translation._package_index = None
+        translation._package_index_failed_at = 0.0
+
+    @staticmethod
+    def _install_model(root: Path, from_code: str = "en", to_code: str = "zh") -> Path:
+        model_root = root / f"{from_code}_{to_code}" / "translate-test-1"
+        (model_root / "model").mkdir(parents=True)
+        (model_root / "metadata.json").write_text(
+            json.dumps({"from_code": from_code, "to_code": to_code}),
+            encoding="utf-8",
+        )
+        for relative in ("model/config.json", "model/model.bin", "sentencepiece.model"):
+            (model_root / relative).write_bytes(b"test")
+        return model_root
+
+    def test_installed_model_is_found_without_network(self):
+        """已安装的本地模型不需要联网清单也能定位（离线承诺）。"""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._install_model(root)
+            with patch.object(translation, "_translation_model_root", return_value=root), patch.object(
+                translation, "_load_package_index", side_effect=RuntimeError("offline")
+            ):
+                package = translation._find_package("en", "zh")
+            self.assertIsNotNone(package)
+            self.assertEqual(package.urls, ())
+
+    def test_ensure_model_reuses_installed_without_download(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            expected = self._install_model(root)
+            translator = ArgosTranslator()
+            package = translation.TranslationPackage("en", "zh", "translate-en_zh", "installed", ())
+            with patch.object(translation, "_translation_model_root", return_value=root):
+                self.assertEqual(translator._ensure_model(package), expected)
+
+    def test_ensure_model_without_urls_and_not_installed_raises(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            translator = ArgosTranslator()
+            package = translation.TranslationPackage("en", "zh", "translate-en_zh", "1", ())
+            with patch.object(translation, "_translation_model_root", return_value=Path(temporary)):
+                with self.assertRaises(RuntimeError):
+                    translator._ensure_model(package)
+
+    def test_package_index_falls_back_to_disk_cache_when_offline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = Path(temporary) / "index.json"
+            cache.write_text(
+                json.dumps([{"from_code": "en", "to_code": "zh"}]),
+                encoding="utf-8",
+            )
+            with patch.object(translation, "_package_index_cache_path", return_value=cache), patch.object(
+                translation, "urlopen", side_effect=OSError("offline")
+            ):
+                index = translation._load_package_index()
+            self.assertEqual(index[0]["from_code"], "en")
+
+    def test_package_index_failure_is_backed_off(self):
+        """清单读取失败后退避重试，不为每个字幕段都撞一次网络。"""
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = Path(temporary) / "index.json"
+            with patch.object(translation, "_package_index_cache_path", return_value=cache), patch.object(
+                translation, "urlopen", side_effect=OSError("offline")
+            ) as mocked:
+                with self.assertRaises(RuntimeError):
+                    translation._load_package_index()
+                with self.assertRaises(RuntimeError):
+                    translation._load_package_index()
+                self.assertEqual(mocked.call_count, 1)
+
+    def test_package_index_success_is_cached_to_disk(self):
+        class _FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return json.dumps([{"from_code": "en", "to_code": "zh"}]).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = Path(temporary) / "index.json"
+            with patch.object(translation, "_package_index_cache_path", return_value=cache), patch.object(
+                translation, "urlopen", return_value=_FakeResponse()
+            ):
+                translation._load_package_index()
+            self.assertTrue(cache.is_file())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -48,6 +48,8 @@ class Settings:
     overlay_font_size: int = 24
     overlay_translation_font_size: int = 20
     overlay_topmost: bool = True
+    overlay_auto_height: bool = True
+    overlay_animation: bool = True
     overlay_geometry: str = "680x180+80+80"
 
     @classmethod
@@ -89,6 +91,9 @@ class Settings:
                 }
             else:
                 values["recognition_condition_on_previous_text"] = bool(condition)
+        for key in ("overlay_auto_height", "overlay_animation", "overlay_topmost"):
+            if key in values and not isinstance(values[key], bool):
+                values[key] = str(values[key]).lower() in {"1", "true", "yes", "on", "启用"}
         if "recognition_temperature_schedule" in values and values[
             "recognition_temperature_schedule"
         ] not in RECOGNITION_TEMPERATURE_SCHEDULES:

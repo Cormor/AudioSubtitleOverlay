@@ -22,7 +22,16 @@ class RollingTranscript:
     pause_split_seconds = 0.55
     pause_sentence_seconds = 0.7
     backfill_punctuation = set("。！？.!?,，；;：:")
-    boundary_punctuation = set("。！？.!?,，；;：:")
+    boundary_punctuation = set("。！？.!?,，；;：:…～")
+    # 句末标点：分段推迟到收尾符号之后，避免把引号、括号拆到下一段。
+    terminal_punctuation = set("。！？.!…～")
+    # 句末之后允许继续吸附的收尾引号、括号。
+    closing_punctuation = set("”’\"』」）》】〉)]}")
+    # 补标点前不应出现标点的起始符号（如以左引号结尾时不补）。
+    opening_punctuation = set("“‘『「（《【〈([{")
+    # 长句在已确认的词边界分段，避免整段历史每次从头重新排版。
+    long_block_limit = 160
+    long_block_hard_limit = 260
 
     def __init__(self):
         self.confirmed_end = 0.0
@@ -34,6 +43,10 @@ class RollingTranscript:
         self._safe_end = 0.0
         self._last_stable_end = 0.0
         self._block_end_times = {}
+        self._active_end_time = 0.0
+        self._split_armed = None
+        self._armed_terminal = ''
+        self._preferred_break = 0
 
     @property
     def safe_trim_time(self):
@@ -70,9 +83,9 @@ class RollingTranscript:
             ]
 
         confirmed = _key(self.confirmed_text[-128:])
-        positions = [(index, _key(unit.text)) for index, unit in enumerate(units) if _key(unit.text)]
+        positions = [(index, char) for index, unit in enumerate(units) for char in _key(unit.text)]
         incoming = ''.join(key for _, key in positions)
-        for length in range(min(16, len(confirmed)), 1, -1):
+        for length in range(min(128, len(confirmed)), 1, -1):
             suffix = confirmed[-length:]
             start = 0
             candidates = []
@@ -126,15 +139,121 @@ class RollingTranscript:
                     updates.append((block_id, corrected))
                     break
 
+    @staticmethod
+    def _is_cjk(char: str) -> bool:
+        """判断字符是否属于中日韩文字（不含标点）。"""
+        return bool(char) and (
+            "\u3400" <= char <= "\u9fff"
+            or "\u3040" <= char <= "\u30ff"
+            or "\uac00" <= char <= "\ud7af"
+        )
+
     @classmethod
-    def _add_pause_punctuation(cls, text: str, gap: float) -> str:
-        """在模型未给出标点时，按停顿长度补入可修订的中文标点。"""
+    def _ends_with_cjk(cls, text: str) -> bool:
+        for char in reversed(text):
+            if not char.isspace():
+                return cls._is_cjk(char)
+        return False
+
+    @classmethod
+    def _add_pause_punctuation(cls, text: str, gap: float, mark: str | None = None) -> str:
+        """按停顿长度补入可修订标点；已有标点时不重复补入。
+
+        中日韩文字后补全角标点，拉丁文字后补半角标点，避免英文被插入全角逗号。
+        判断“已有标点”时会看穿末尾的收尾引号、括号（如“好。”后不再补）。
+        """
         core = text.rstrip(" \t\r\n")
         suffix = text[len(core):]
-        if not core or core[-1:] in cls.boundary_punctuation:
+        if not core:
             return text
-        mark = "。" if gap + 1e-6 >= cls.pause_sentence_seconds else "，"
+        head = core
+        while len(head) > 1 and head[-1] in cls.closing_punctuation:
+            head = head[:-1]
+        if head[-1] in cls.boundary_punctuation or head[-1] in cls.opening_punctuation:
+            return text
+        if mark is None:
+            sentence_level = gap + 1e-6 >= cls.pause_sentence_seconds
+            if cls._ends_with_cjk(head):
+                mark = "。" if sentence_level else "，"
+            else:
+                mark = "." if sentence_level else ","
         return core + mark + suffix
+
+    def _append_char(self, char: str, unit: TextUnit) -> None:
+        """提交单个字符并推进已确认位置。"""
+        self.active_text += char
+        self._active_end_time = max(self._active_end_time, unit.end)
+        self._last_stable_end = max(self._last_stable_end, unit.end)
+        self.confirmed_text = (self.confirmed_text + char)[-128:]
+        self.confirmed_end = max(self.confirmed_end, unit.end)
+
+    def _close_block(self, updates) -> None:
+        """把当前段落落段；段内收尾引号、括号已先吸附到正文。"""
+        text = self.active_text.strip(" \t")
+        if text:
+            self._block_end_times[self.block_id] = self._active_end_time
+            self._publish(updates, self.block_id, text)
+            self.block_id += 1
+        self.active_text = ''
+        self._active_end_time = 0.0
+        self._preferred_break = 0
+        self._split_armed = None
+        self._armed_terminal = ''
+
+    def _absorbs_after_split(self, char: str) -> bool:
+        """句末之后的收尾引号、括号、空白与重复句末标点留在上一段内。
+
+        起始引号、括号不吸收，避免下一段开头的引号被并进上一段。
+        """
+        if self._split_armed != "sentence":
+            return char in self.terminal_punctuation
+        return (
+            char.isspace()
+            or char in self.terminal_punctuation
+            or char in self.closing_punctuation
+        )
+
+    def _can_split_before(self, char: str) -> bool:
+        """判断是否可以在当前字符之前落段。"""
+        if self._split_armed == "sentence":
+            return True
+        if self._split_armed == "long":
+            previous = self.active_text[-1:]
+            return (
+                char.isspace()
+                or self._is_cjk(char)
+                or unicodedata.category(char).startswith("P")
+                or self._is_cjk(previous)
+                or (previous and unicodedata.category(previous).startswith("P"))
+            )
+        return False
+
+    def _note_split_hint(self, char: str) -> None:
+        """记录可分段位置：句末标点、空白，以及长句软分段阈值。"""
+        if char.isspace():
+            self._preferred_break = len(self.active_text)
+        if char in self.terminal_punctuation:
+            self._split_armed = "sentence"
+            self._armed_terminal = char
+            self._preferred_break = len(self.active_text)
+        elif self._split_armed is None and len(self.active_text) >= self.long_block_limit:
+            self._split_armed = "long"
+
+    def _maybe_hard_split(self, updates) -> None:
+        """超长兜底：在最佳边界带标点切开，避免无限增长的段落。"""
+        if len(self.active_text) < self.long_block_hard_limit:
+            return
+        split_at = self._preferred_break
+        if split_at < self.long_block_limit // 2:
+            split_at = self.long_block_limit
+        split_at = min(split_at, len(self.active_text))
+        remainder = self.active_text[split_at:]
+        self.active_text = self._add_pause_punctuation(
+            self.active_text[:split_at],
+            self.pause_comma_seconds,
+        )
+        self._close_block(updates)
+        self.active_text = remainder
 
     def _pending_display_text(self) -> str:
         """未确认尾部也按停顿显示分隔，排版分隔不改动词时间或确认状态。"""
@@ -144,8 +263,7 @@ class RollingTranscript:
             gap = unit.start - previous_end
             if text.strip() and gap >= self.pause_comma_seconds and _key(unit.text):
                 text = self._add_pause_punctuation(text, gap)
-                if gap >= self.pause_split_seconds and not text.endswith("\n"):
-                    text += "\n"
+                # 草稿停顿只补标点；确认分段统一由提交路径处理，避免换行闪动。
             text += unit.text
             previous_end = max(previous_end, unit.end)
         if text.strip() and self.pending and self._safe_end - self.pending[-1].end >= self.pause_sentence_seconds:
@@ -161,12 +279,57 @@ class RollingTranscript:
         """新版本直接修订候选；静音空结果保留尾部直到语音结束确认。"""
         return new_units if new_units else old_units
 
+    def _commit_units(self, stable, updates):
+        """统一提交过期候选和一致候选，先推进去重时间再接收下一窗口。"""
+        for index, unit in enumerate(stable):
+            char = unit.text
+            if self._split_armed and self._absorbs_after_split(char):
+                # 收尾引号、括号与重复句末标点吸附到上一段，句末不拆行。
+                self._append_char(char, unit)
+                self._note_split_hint(char)
+                continue
+            if (
+                self._split_armed == "sentence"
+                and self._armed_terminal == "."
+                and char.isascii()
+                and (char.isdigit() or char.islower())
+            ):
+                # 小数点（3.14）与缩写（e.g.）不作为句末。
+                self._split_armed = None
+                self._armed_terminal = ''
+            if self._split_armed and self._can_split_before(char):
+                # 句末/长句分段：在下一个自然边界落段，正文不丢收尾符号。
+                self._close_block(updates)
+            previous_end = stable[index - 1].end if index else self._last_stable_end
+            pause_gap = unit.start - previous_end
+            pause_break = (
+                pause_gap >= self.pause_split_seconds
+                and self.active_text.strip(" \t")
+            )
+            if pause_break:
+                # 识别结果没有标点时，词时间中的明显停顿也形成新的字幕段；
+                # 段末按句末级补标点，避免新段以逗号结尾。
+                self.active_text = self._add_pause_punctuation(
+                    self.active_text,
+                    max(pause_gap, self.pause_sentence_seconds),
+                )
+                self._close_block(updates)
+            elif pause_gap >= self.pause_comma_seconds and self.active_text.strip(" \t"):
+                # 停顿后的首字符即使是空白也先补标点，避免逗号丢失在空格上。
+                self.active_text = self._add_pause_punctuation(self.active_text, pause_gap)
+            self._append_char(char, unit)
+            self._note_split_hint(char)
+            self._maybe_hard_split(updates)
+
     def update(self, words, offset, audio_end):
         # 离开修订窗口的候选按已有文字提交，不因窗口前移丢失正文。
         expired = [unit for unit in self.pending if unit.end <= offset]
         self.pending = [unit for unit in self.pending if unit.end > offset]
         units = self._units(words, offset)
         updates = []
+        # 过期前缀属于已提交音频，必须先推进确认边界；否则新窗重定时
+        # 的同一前缀会与 expired 一起追加，形成 hellohello 这样的重复。
+        self._commit_units(expired, updates)
         self._backfill_late_punctuation(units, updates)
         incoming = self._trim_confirmed(units)
         stale_result = bool(incoming and self.pending and incoming[-1].end < self.pending[-1].end - 0.2)
@@ -210,7 +373,7 @@ class RollingTranscript:
         if end_of_speech:
             incoming = incoming or self.pending
             stable_count = len(incoming)
-        stable = expired + incoming[:stable_count]
+        stable = incoming[:stable_count]
         if end_of_speech:
             # 静音窗口已经把整个待确认尾部提交为稳定正文，不再把同一批单元保留为候选。
             old_pending_remainder = []
@@ -222,38 +385,7 @@ class RollingTranscript:
             old_pending_remainder,
             new_pending_remainder,
         )
-        for index, unit in enumerate(stable):
-            previous_end = stable[index - 1].end if index else self._last_stable_end
-            pause_gap = unit.start - previous_end
-            pause_break = (
-                pause_gap >= self.pause_split_seconds
-                and self.active_text.strip(" \t")
-            )
-            if pause_break:
-                # 识别结果没有标点时，词时间中的明显停顿也形成新的字幕段。
-                self._block_end_times[self.block_id] = previous_end
-                self._publish(
-                    updates,
-                    self.block_id,
-                    self._add_pause_punctuation(self.active_text, pause_gap),
-                )
-                self.block_id += 1
-                self.active_text = ''
-            if not pause_break and pause_gap >= self.pause_comma_seconds and _key(unit.text):
-                self.active_text = self._add_pause_punctuation(self.active_text, pause_gap)
-            self.active_text += unit.text
-            self._last_stable_end = max(self._last_stable_end, unit.end)
-            self.confirmed_text = (self.confirmed_text + unit.text)[-128:]
-            self.confirmed_end = max(self.confirmed_end, unit.end)
-            next_text = stable[index + 1].text if index + 1 < len(stable) else (self.pending[0].text if self.pending else '')
-            sentence_end = unit.text in '。！？' or (unit.text in '.!?' and (not next_text or next_text.isspace()))
-            # 长句在已确认的词边界分段，避免整段历史每次从头重新排版。
-            long_block = len(self.active_text) >= 160 and (unit.text.isspace() or '\u3400' <= unit.text <= '\u9fff')
-            if (sentence_end or long_block) and self.active_text.strip(" \t"):
-                self._block_end_times[self.block_id] = unit.end
-                self._publish(updates, self.block_id, self.active_text.strip(" \t"))
-                self.block_id += 1
-                self.active_text = ''
+        self._commit_units(stable, updates)
         if end_of_speech or (
             self.active_text and not self.pending
             and audio_end - self._last_stable_end >= self.pause_sentence_seconds
@@ -262,6 +394,7 @@ class RollingTranscript:
                 self.active_text,
                 self.pause_sentence_seconds,
             )
+            self._close_block(updates)
         self._safe_end = audio_end
         current_text = self._pending_display_text()
         if current_text:
