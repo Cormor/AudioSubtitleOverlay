@@ -9,12 +9,26 @@ permissions:
   contents: write
 
 jobs:
+  release-tests:
+    name: 发布前单元测试
+    if: startsWith(github.event.head_commit.message, '发布 v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+      - name: 准备 Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 安装测试依赖
+        run: python -m pip install -r requirements-test.txt
+      - name: 运行单元测试
+        run: python -m unittest discover -s tests -v
+
   build-and-release:
     name: 构建并发布 Windows 便携版
-    if: startsWith(github.event.head_commit.message, '发布 v1.2.0')
+    needs: release-tests
     runs-on: windows-latest
-    env:
-      RELEASE_TAG: v1.2.0
     steps:
       - name: 检出源码
         uses: actions/checkout@v4
@@ -23,6 +37,21 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: 读取并校验发布版本
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = (Get-Content "VERSION" -Raw).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "VERSION 必须为三段数字版本号。"
+          }
+          $tag = "v$version"
+          $subject = git log -1 --format=%s
+          if ($subject -notmatch "^发布 $([regex]::Escape($tag))(?:[：: ]|$)") {
+            throw "发布提交标题与 VERSION 不一致。"
+          }
+          "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
 
       - name: 构建 Windows 主程序
         shell: cmd
@@ -36,30 +65,28 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-
           $mainSource = Get-ChildItem "releases\AudioSubtitleOverlay_精简版_*.zip" |
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
           $tinySource = Get-ChildItem "releases\AudioSubtitleOverlay_tiny模型_*.zip" |
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
-          if ($null -eq $mainSource) {
-            throw "未找到主程序压缩包。"
-          }
-          if ($null -eq $tinySource) {
-            throw "未找到 tiny 模型压缩包。"
+          if ($null -eq $mainSource -or $null -eq $tinySource) {
+            throw "未找到主程序或 tiny 模型压缩包。"
           }
 
           $assetDirectory = "release-assets"
           New-Item -ItemType Directory -Force -Path $assetDirectory | Out-Null
-          $mainName = "AudioSubtitleOverlay_Portable_v1.2.0.zip"
-          $tinyName = "AudioSubtitleOverlay_tiny_model_v1.2.0.zip"
+          $mainName = "AudioSubtitleOverlay_Portable_$($env:RELEASE_TAG).zip"
+          $tinyName = "AudioSubtitleOverlay_tiny_model_$($env:RELEASE_TAG).zip"
           $mainAsset = Join-Path $assetDirectory $mainName
           $tinyAsset = Join-Path $assetDirectory $tinyName
-          Copy-Item $mainSource.FullName $mainAsset -Force
-          Copy-Item $tinySource.FullName $tinyAsset -Force
-
-          python -c 'from zipfile import ZipFile; paths=[r"release-assets\AudioSubtitleOverlay_Portable_v1.2.0.zip", r"release-assets\AudioSubtitleOverlay_tiny_model_v1.2.0.zip"]; assert all(ZipFile(path).testzip() is None for path in paths)'
+          Copy-Item $mainSource.FullName $mainAsset
+          Copy-Item $tinySource.FullName $tinyAsset
+          $env:MAIN_ASSET = $mainAsset
+          $env:TINY_ASSET = $tinyAsset
+          python -c 'import os; from zipfile import ZipFile; paths=[os.environ["MAIN_ASSET"], os.environ["TINY_ASSET"]]; assert all(ZipFile(p).testzip() is None for p in paths); z=ZipFile(paths[0]); assert z.read("AudioSubtitleOverlay/版本.txt").decode("utf-8").strip() == "版本：" + os.environ["RELEASE_TAG"]; assert "AudioSubtitleOverlay/AudioSubtitleOverlay.exe" in z.namelist()'
+          if ($LASTEXITCODE -ne 0) { throw "发布包完整性或版本校验失败。" }
 
           $mainInfo = Get-Item $mainAsset
           $tinyInfo = Get-Item $tinyAsset
@@ -85,13 +112,10 @@ jobs:
             $notes = $notes.Replace($entry.Key, $entry.Value)
           }
           Set-Content "release-assets\RELEASE_NOTES.md" -Value $notes -Encoding utf8
+          "$mainHash  $mainName`n$tinyHash  $tinyName" |
+            Set-Content "release-assets\SHA256SUMS.txt" -Encoding ascii
 
-          @"
-          $mainHash  $mainName
-          $tinyHash  $tinyName
-          "@ | Set-Content "release-assets\SHA256SUMS.txt" -Encoding ascii
-
-      - name: 创建或更新 GitHub Release 并上传资产
+      - name: 创建草稿并上传资产，确认后公开发布
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -100,13 +124,22 @@ jobs:
           $repo = $env:GITHUB_REPOSITORY
           $tag = $env:RELEASE_TAG
           $assets = @(
-            "release-assets/AudioSubtitleOverlay_Portable_v1.2.0.zip",
-            "release-assets/AudioSubtitleOverlay_tiny_model_v1.2.0.zip",
+            "release-assets/AudioSubtitleOverlay_Portable_$tag.zip",
+            "release-assets/AudioSubtitleOverlay_tiny_model_$tag.zip",
             "release-assets/SHA256SUMS.txt"
           )
-
-          gh release create $tag @assets --repo $repo --title "AudioSubtitleOverlay $tag" --notes-file "release-assets\RELEASE_NOTES.md" --target $env:GITHUB_SHA
-          if ($LASTEXITCODE -ne 0) {
-            gh release upload $tag @assets --repo $repo --clobber
-            gh release edit $tag --repo $repo --title "AudioSubtitleOverlay $tag" --notes-file "release-assets\RELEASE_NOTES.md"
+          # 不覆盖已有 Release 或资产；新版本先上传到草稿再公开。
+          gh release create $tag @assets --draft --repo $repo --title "AudioSubtitleOverlay $tag" --notes-file "release-assets\RELEASE_NOTES.md" --target $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw "创建 Release 草稿或上传资产失败。" }
+          $raw = gh release view $tag --repo $repo --json assets,tagName,targetCommitish,isDraft
+          if ($LASTEXITCODE -ne 0) { throw "无法读回 Release 草稿。" }
+          $release = $raw | ConvertFrom-Json
+          $expected = $assets | ForEach-Object { Split-Path $_ -Leaf }
+          $actual = @($release.assets | ForEach-Object { $_.name })
+          if (-not $release.isDraft -or $release.tagName -ne $tag -or $release.targetCommitish -ne $env:GITHUB_SHA -or $actual.Count -ne 3 -or (Compare-Object $expected $actual)) {
+            throw "Release 草稿的版本、提交或资产列表不匹配。"
           }
+          gh release edit $tag --repo $repo --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw "公开发布失败。" }
+          gh release view $tag --repo $repo --json url,tagName,isDraft,assets
+          if ($LASTEXITCODE -ne 0) { throw "无法读回已发布 Release。" }

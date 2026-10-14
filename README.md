@@ -12,6 +12,8 @@ AudioSubtitleOverlay 是 Windows 桌面悬浮字幕应用，可识别系统播�
 - 提供 Beta 音频来源，可尝试自动跟踪正在发声的应用并直接采集该应用声音；需要 Windows 10 build 20348 或更高版本，部分应用可能不支持。
 - 支持运行中切换音频来源、源语言、目标语言、识别模型、计算设备和识别质量参数。
 - 可调整搜索范围、前文参考和解码回退。
+- 原文与译文各支持一行最小高度，浮窗滚动条可拖动回看最近 64 段确认字幕。
+- 手动指定源语言时按语言是否相同启用译文区；自动检测时，原文持续更新且 5 秒没有译文输出才收起。
 - 本地翻译首次使用时按语言对下载模型，完成后可离线使用；也可选择免费在线翻译。
 - 支持 CPU 运行；选择 GPU 时优先使用本机已有的兼容运行库，缺少时才按需准备。
 - 主程序包约 110 MiB，低于 150 MiB；不要求目标电脑预装 Python。
@@ -28,8 +30,8 @@ AudioSubtitleOverlay 是 Windows 桌面悬浮字幕应用，可识别系统播�
 
 ### 发布文件
 
-- `AudioSubtitleOverlay_Portable_v1.2.0.zip`：主程序，约 110 MiB。
-- `AudioSubtitleOverlay_tiny_model_v1.2.0.zip`：可选 tiny 模型包，约 67 MiB。
+- `AudioSubtitleOverlay_Portable_v1.2.1.zip`：主程序，约 110 MiB。
+- `AudioSubtitleOverlay_tiny_model_v1.2.1.zip`：可选 tiny 模型包，约 67 MiB。
 - `SHA256SUMS.txt`：发布文件校验值。
 
 ## English
@@ -40,6 +42,8 @@ AudioSubtitleOverlay is a Windows desktop subtitle overlay. It recognizes system
 - Offers a beta audio source that attempts to follow an app currently producing sound and capture its audio directly. Requires Windows 10 build 20348 or later; some apps may not be supported.
 - Lets users change the audio source, languages, recognition model, compute device, and recognition quality settings while recognition is running.
 - Provides adjustable search range, context use, and decode fallback.
+- Supports one-row minimum heights for source and translation, with a draggable scrollbar for the latest 64 confirmed subtitle blocks.
+- Keeps the translation area enabled for different manually selected languages; in automatic mode, it collapses only after five seconds of source updates without translation output.
 - Downloads a local translation model for the selected language pair on first use; it can then work offline, or use free online translation instead.
 - Supports CPU mode; GPU mode reuses a compatible runtime already available on the computer and prepares it only when missing.
 - The main portable package is about 110 MiB and does not require Python to be installed on the target computer.

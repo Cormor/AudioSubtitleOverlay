@@ -2,8 +2,17 @@
 
 ## 更新 | Update
 
-- 新增 Beta 应用音频来源，尝试跟踪正在发声的应用并直接采集声音。需要 Windows 10 build 20348 或更高版本；部分应用可能不支持。
-- Added a beta audio source that attempts to follow an app producing sound and capture it directly. Requires Windows 10 build 20348 or later; some apps may not be supported.
+- 改善双语字幕阅读：固定文字基线和原文、译文分区，修复换行续排及重叠识别窗口造成的重复追加。
+- 原文与译文均支持一行最小高度，扩大缩放手柄；滚动条支持拖动、轨道点击和回到最新字幕。
+- 手动指定源语言时按源语言与目标语言是否相同启用译文区；自动检测时，原文持续更新且连续 5 秒没有译文输出才收起，译文恢复后重新展开。
+- 浮窗保留最近 64 段确认字幕，复用历史换行缓存；修复过时译文挂接到新原文及窗口关闭后程序未退出的问题。
+- 优先复用已安装的本地翻译模型，支持语言模型清单缓存，并减少连续翻译失败时的重复报错。
+
+- Improves bilingual reading with fixed text baselines and separate language areas; fixes wrapping and repeated text from overlapping recognition windows.
+- Supports one-row minimum heights, a larger resize grip, and a draggable scrollbar for history review.
+- Uses the selected language pair to enable translation in manual mode. Automatic mode waits for five seconds of source updates without translation output before collapsing the area, and restores it when translation resumes.
+- Keeps the latest 64 confirmed blocks and reuses wrapping caches; fixes stale translation assignment and application shutdown.
+- Reuses installed local translation models, caches the model index, and reduces repeated error reporting.
 
 ## 下载与运行 | Download and run
 
