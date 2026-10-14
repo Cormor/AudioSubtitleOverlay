@@ -50,6 +50,7 @@ class Application:
         self._display = DisplayModule(
             language_code(self.settings.source_language),
             language_code(self.settings.target_language, allow_auto=False) or "zh",
+            translation_enabled=self.settings.translation_enabled,
         )
         # 保留旧验证脚本使用的只读入口；显示状态的实际变更只在 DisplayModule 内完成。
         self._history = self._display.history
@@ -108,6 +109,7 @@ class Application:
         self.audio_selection_var = tk.StringVar()
         self.audio_device_var.trace_add("write", self._update_audio_selection)
         self._update_audio_selection()
+        self.translation_enabled_var = tk.BooleanVar(value=self.settings.translation_enabled)
         self.translation_var = tk.StringVar(value=self.settings.translation_backend)
         self.status_var = tk.StringVar(value="准备就绪")
         self.source_display_var = tk.StringVar(value="等待识别")
@@ -276,9 +278,11 @@ class Application:
 
         translation_frame = ttk.LabelFrame(container, text="翻译", padding=12)
         translation_frame.pack(fill="x", pady=(0, 10))
+        ttk.Checkbutton(translation_frame, text="启用翻译（同语言自动停用）",
+                        variable=self.translation_enabled_var).grid(row=0, column=0, columnspan=3, sticky="w")
         self._add_labeled_combo(
             translation_frame,
-            0,
+            1,
             "翻译后端",
             self.translation_var,
             ["本地优先，失败转在线", "仅使用本地翻译", "仅使用免费在线 MyMemory"],
@@ -288,7 +292,7 @@ class Application:
             translation_frame,
             text="本地翻译首次使用时会下载所需语言模型；下载后可离线使用。在线后端会把识别文本发送到公共接口。",
             foreground="#5c6773",
-        ).grid(row=1, column=1, columnspan=2, sticky="w", pady=(6, 0))
+        ).grid(row=2, column=1, columnspan=2, sticky="w", pady=(6, 0))
 
         overlay_frame = ttk.LabelFrame(container, text="悬浮窗外观", padding=12)
         overlay_frame.pack(fill="x", pady=(0, 10))
@@ -336,6 +340,7 @@ class Application:
             anchor="w"
         )
 
+        self.translation_enabled_var.trace_add("write", self._on_translation_enabled_changed)
         for variable in (self.source_var, self.target_var):
             variable.trace_add("write", self._on_language_changed)
         for variable in (
@@ -615,8 +620,9 @@ class Application:
                 continue
             measurements = update.measurements(presented_at)
             logging.info(
-                "字幕窗口已提交：序号=%s，段落=%s，音频终点=%.3f秒，耗时=%s",
-                update.sequence, block_id, update.audio_end, measurements,
+                "字幕窗口已提交：序号=%s，段落=%s，音频终点=%.3f秒，阅读模式=%s，耗时=%s",
+                update.sequence, block_id, update.audio_end,
+                "实时" if getattr(getattr(self, "overlay", None), "_follow_tail", True) else "历史", measurements,
             )
         # 阅读停留期间末尾可能尚未进入视口，不能拿旧的可见前缀冒充新结果。
         # 每段只保留最新版本；离开有界历史的段落才丢弃记录。
@@ -647,6 +653,11 @@ class Application:
 
     def _show_error(self, text: str) -> None:
         self._set_status(text)
+
+    def _on_translation_enabled_changed(self, *_args) -> None:
+        self._display.set_translation_enabled(self.translation_enabled_var.get())
+        self._flush_display()
+        self._queue_live_configuration()
 
     def _on_language_changed(self, *_args) -> None:
         self._update_translation_visibility()
@@ -681,6 +692,7 @@ class Application:
             model_path=self.model_path_var.get(),
             audio_device=audio_device,
             translation_backend=self.translation_var.get(),
+            translation_enabled=self.translation_enabled_var.get(),
             beam_size=beam_size,
             condition_on_previous_text=self.context_var.get() == "启用",
             temperature_schedule=_TEMPERATURE_VALUES_BY_LABEL.get(
@@ -705,7 +717,7 @@ class Application:
         if options is None:
             return
         if pipeline.update_options(options):
-            self._set_status("正在应用新的识别设置……")
+            self._set_status("正在应用新的设置……")
 
     def _reset_runtime_display(self) -> None:
         """切换设置后清空上一组字幕，避免新旧内容混在一起。"""
@@ -851,6 +863,7 @@ class Application:
         )
         self.settings.model_path = self.model_path_var.get()
         self.settings.loopback_device = self.audio_device_var.get()
+        self.settings.translation_enabled = self.translation_enabled_var.get()
         self.settings.translation_backend = self.translation_var.get()
         if hasattr(self, "overlay"):
             self.overlay.persist_geometry()

@@ -180,8 +180,9 @@ class DisplaySnapshot:
 class DisplayModule:
     """接收原文、即时预览和翻译结果，输出批量显示快照。"""
 
-    def __init__(self, source_language: str | None, target_language: str) -> None:
+    def __init__(self, source_language: str | None, target_language: str, translation_enabled: bool = True) -> None:
         self.history = SubtitleHistory()
+        self._translation_enabled = translation_enabled
         self._translation_activity = 0
         self._source_language = source_language
         self._target_language = target_language
@@ -216,7 +217,21 @@ class DisplayModule:
 
     def _translation_visible(self) -> bool:
         # 自动检测会在混合语言和短音频中反复变化，不随单次检测拆掉译文区。
-        return self._source_language is None or self._source_language != self._target_language
+        return self._translation_enabled and (self._source_language is None or self._source_language != self._target_language)
+
+    def set_translation_enabled(self, enabled: bool) -> bool:
+        if self._translation_enabled == enabled:
+            return False
+        self._translation_enabled = enabled
+        if not enabled:
+            for block in self.history.blocks.values():
+                block.translation = ""
+                block.translation_sequence = -1
+            self.history._pending_translations.clear()
+            self._latest_translation = ""
+            self._latest_translation_sequence = -1
+        self._mark_dirty()
+        return True
 
     def _mark_dirty(self) -> None:
         self._dirty = True
@@ -353,7 +368,7 @@ class DisplayModule:
         language: str | None,
     ) -> bool:
         """接收翻译线程的结果；目标语言不匹配的结果直接丢弃。"""
-        if language != self._target_language:
+        if not self._translation_visible() or language != self._target_language:
             return False
         normalized = self._normalize_text(text, language)
         if not normalized:

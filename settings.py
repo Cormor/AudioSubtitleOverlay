@@ -36,6 +36,7 @@ class Settings:
     recognition_temperature_schedule: str = "0"
     model_path: str = ""
     loopback_device: str = ""
+    translation_enabled: bool = True
     translation_backend: str = "本地优先，失败转在线"
     overlay_background: str = "#101827"
     overlay_text_color: str = "#ffffff"
@@ -91,7 +92,7 @@ class Settings:
                 }
             else:
                 values["recognition_condition_on_previous_text"] = bool(condition)
-        for key in ("overlay_auto_height", "overlay_animation", "overlay_topmost"):
+        for key in ("overlay_auto_height", "overlay_animation", "overlay_topmost", "translation_enabled"):
             if key in values and not isinstance(values[key], bool):
                 values[key] = str(values[key]).lower() in {"1", "true", "yes", "on", "启用"}
         if "recognition_temperature_schedule" in values and values[

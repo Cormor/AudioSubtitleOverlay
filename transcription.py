@@ -19,6 +19,7 @@ from model_manager import (
 )
 from runtime_components import nvidia_driver_available, prepare_component
 from settings import RECOGNITION_BEAM_SIZES
+from text_processing import remove_subtitle_credit, subtitle_credit_spans
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,39 @@ class RecognizedWord:
     start: float
     end: float
     text: str
+
+
+def clean_recognized_words(words: list[RecognizedWord]) -> list[RecognizedWord]:
+    """在滚动确认前移除跨词字幕署名，并保留其余文字的时间范围。"""
+    parts = []
+    offsets = []
+    length = 0
+    for i, word in enumerate(words):
+        # 分析用分隔符不进入输出；有实际停顿时，署名不能吞掉后面的正文。
+        if i and word.start - words[i - 1].end >= 0.18:
+            parts.append("\0")
+            length += 1
+        offsets.append(length)
+        parts.append(word.text)
+        length += len(word.text)
+    spans = subtitle_credit_spans("".join(parts))
+    if not spans:
+        return words
+    cleaned = []
+    for word, offset in zip(words, offsets):
+        start = None
+        for i in range(len(word.text) + 1):
+            keep = i < len(word.text) and not any(a <= offset + i < b for a, b in spans)
+            if keep and start is None:
+                start = i
+            if not keep and start is not None:
+                duration = max(0, word.end - word.start)
+                n = max(1, len(word.text))
+                cleaned.append(RecognizedWord(word.start + duration * start / n,
+                                              word.start + duration * i / n, word.text[start:i]))
+                start = None
+    logging.info("模型词结果已净化：字幕署名片段=%s；不记录原始识别内容", len(spans))
+    return cleaned
 
 
 @dataclass(frozen=True)
@@ -217,7 +251,9 @@ class WhisperRecognizer:
                 words.extend(RecognizedWord(word.start, word.end, word.word) for word in timed_words)
             elif segment.text:
                 words.append(RecognizedWord(segment.start, segment.end, segment.text))
-        return RecognitionResult(text=text, language=detected_language, words=words)
+        cleaned_words = clean_recognized_words(words)
+        cleaned_text = "".join(w.text for w in cleaned_words).strip() if cleaned_words != words else remove_subtitle_credit(text)
+        return RecognitionResult(text=cleaned_text, language=detected_language, words=cleaned_words)
 
 
 def model_cache_hint() -> str:

@@ -165,10 +165,16 @@ class ReadingCursor:
 
     def select(self, total, capacity, now, dwell):
         latest = max(0, total - capacity)
+        if dwell <= 0:
+            self.start = latest
+            self.advanced_at = now
+            return latest, None
         if self.start is None:
             self.start = latest
             self.advanced_at = now
-        self.start = min(self.start, latest)
+        # 实时阅读只容许一个视口的待显示行；更旧内容留在历史中回看，
+        # 不能把突发结果逐行播放成数十秒的延迟。
+        self.start = max(min(self.start, latest), latest - max(1, capacity))
         if self.start < latest and now >= self.advanced_at + dwell:
             self.start += 1
             self.advanced_at = now

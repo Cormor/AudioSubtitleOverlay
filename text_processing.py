@@ -18,9 +18,14 @@ _CHINESE_PUNCTUATION = str.maketrans(
 
 # 内部文本净化：在翻译和历史记录前移除不需要的附加文本。
 _SUBTITLE_CREDIT = re.compile(
-    r"字幕\s*(?:[:：]\s*)?by\s*[@#\w](?:[\w.-]*)",
+    r"(?:[【\[（(]\s*)?(?:字[\s\0。．.!！:：、,，]{0,6})?幕[\s\0。．.!！:：、,，]{0,6}by\s*[@#_]?"
+    r"(?:[A-Za-z0-9][A-Za-z0-9_.-]*|[^\W_][\w.-]*)(?:\s*[】\]）)])?",
     re.IGNORECASE,
 )
+
+
+def subtitle_credit_spans(text: str) -> list[tuple[int, int]]:
+    return [(m.start(), m.end()) for m in _SUBTITLE_CREDIT.finditer(text)]
 
 
 @lru_cache(maxsize=1)

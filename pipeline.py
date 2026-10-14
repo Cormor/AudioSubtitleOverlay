@@ -35,6 +35,19 @@ class PipelineOptions:
     beam_size: int = 1
     condition_on_previous_text: bool = False
     temperature_schedule: str = "0"
+    translation_enabled: bool = True
+
+
+def translation_required(options: PipelineOptions, detected_language: str | None) -> bool:
+    source = options.source_language or detected_language
+    return bool(options.translation_enabled and source and options.target_language
+                and source != options.target_language)
+
+
+def translation_only_change(previous: PipelineOptions, current: PipelineOptions) -> bool:
+    return replace(current, target_language=previous.target_language,
+                   translation_enabled=previous.translation_enabled,
+                   translation_backend=previous.translation_backend) == previous
 
 
 _GPU_DEVICE_MODES = frozenset(("自动（优先GPU）", "NVIDIA GPU（float16）"))
@@ -107,6 +120,7 @@ class LivePipeline:
         self._configuration_generation = 0
         self._source_language = options.source_language
         self._target_language = options.target_language
+        self._latest_source_language = options.source_language
         self._translation_sequence = 0
         self._pending_translations = {}
         self._translation_running = False
@@ -223,7 +237,7 @@ class LivePipeline:
                         time.sleep(0.1)
                         continue
 
-                    if active_options is not None and configuration_changed:
+                    if active_options is not None and configuration_changed and not translation_only_change(active_options, options):
                         if capture is not None and (model_changed or audio_changed):
                             capture.stop(wait=True)
                             capture = None
@@ -279,6 +293,9 @@ class LivePipeline:
                         else self.cpu_quality_update_samples
                     )
                     last_audio_status_at = time.monotonic()
+                    logging.info("识别配置已生效：源语言=%s，目标语言=%s，翻译开关=%s，搜索范围=%s，前文参考=%s，温度=%s",
+                                 options.source_language or "auto", options.target_language, options.translation_enabled,
+                                 options.beam_size, options.condition_on_previous_text, options.temperature_schedule)
                     if capture is None:
                         self._on_status("正在连接音频设备……")
                         capture = (
@@ -385,7 +402,11 @@ class LivePipeline:
                     buffer_start / SystemAudioCapture.sample_rate, received_samples / SystemAudioCapture.sample_rate,
                     inference_seconds, self._queue.qsize() * SystemAudioCapture.block_size / SystemAudioCapture.sample_rate,
                 )
-                detected_language = result.language or source_language
+                detected_language = source_language or result.language
+                with self._lock:
+                    self._latest_source_language = detected_language
+                    if not translation_required(options, detected_language):
+                        self._pending_translations.clear()
                 updates = transcript.update(
                     result.words,
                     buffer_start / SystemAudioCapture.sample_rate,
@@ -408,7 +429,7 @@ class LivePipeline:
                         ))
                     else:
                         self._on_source(sequence, text, detected_language, block_id)
-                    if detected_language != target_language:
+                    if translation_required(options, detected_language):
                         self._submit_translation(
                             sequence,
                             text,
@@ -465,6 +486,8 @@ class LivePipeline:
         if not text:
             return
         with self._lock:
+            if generation != self._configuration_generation or not translation_required(self.options, self._latest_source_language or source_language) or not translation_required(self.options, source_language):
+                return
             self._pending_translations[block_id] = (
                 sequence,
                 text,
@@ -482,6 +505,11 @@ class LivePipeline:
             if not self._stop_event.is_set():
                 raise
 
+    def _translation_allowed(self, source_language):
+        with self._lock:
+            return (translation_required(self.options, self._latest_source_language or source_language)
+                    and translation_required(self.options, source_language))
+
     def _translate_pending(self) -> None:
         while not self._stop_event.is_set():
             with self._lock:
@@ -497,6 +525,8 @@ class LivePipeline:
                     generation,
                     translation_backend,
                 ) = self._pending_translations.pop(block_id)
+            if not self._is_configuration_current(generation) or not self._translation_allowed(source_language):
+                continue
             try:
                 service = TranslationService(
                     translation_backend,
@@ -504,6 +534,8 @@ class LivePipeline:
                 )
                 translated = service.translate(text, source_language, target_language)
             except Exception as error:
+                if not self._is_configuration_current(generation) or not self._translation_allowed(source_language):
+                    continue
                 self._translation_failures += 1
                 now = time.monotonic()
                 if not self._stop_event.is_set():
@@ -519,5 +551,5 @@ class LivePipeline:
                         logging.debug("字幕翻译失败（节流中）：%s", error)
                 continue
             self._translation_failures = 0
-            if not self._stop_event.is_set() and self._is_configuration_current(generation):
+            if not self._stop_event.is_set() and self._is_configuration_current(generation) and self._translation_allowed(source_language):
                 self._on_translation(sequence, translated, target_language)
