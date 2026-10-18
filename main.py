@@ -65,13 +65,16 @@ class Application:
 
         self.root.title("系统音频识别与翻译悬浮窗")
         # 首次打开尽量多展示内容；屏幕较小时由滚动区域承载剩余内容。
+        # 预留标题栏和任务栏，避免高 DPI 下窗口被撑出屏幕底部。
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
+        usable_height = max(520, int(screen_height * 0.82))
         initial_width = max(760, min(960, screen_width - 80))
-        initial_height = max(640, min(960, screen_height - 100))
+        initial_height = max(640, min(960, usable_height))
         self.root.geometry(f"{initial_width}x{initial_height}")
         self.root.minsize(760, 600)
-        self.root.protocol("WM_DELETE_WINDOW", self.close)
+        # 关设置窗只隐藏，不退出；退出走悬浮窗菜单「退出程序」。
+        self.root.protocol("WM_DELETE_WINDOW", self._hide_settings)
         self._create_variables()
         self._build_ui()
         self.overlay = OverlayWindow(
@@ -353,6 +356,21 @@ class Application:
             self.translation_var,
         ):
             variable.trace_add("write", self._queue_live_configuration)
+        # 任何设置变化都自动落盘，进程被外部结束也能保住配置。
+        for variable in (
+            self.source_var,
+            self.target_var,
+            self.model_var,
+            self.device_var,
+            self.beam_size_var,
+            self.context_var,
+            self.temperature_var,
+            self.model_path_var,
+            self.audio_device_var,
+            self.translation_enabled_var,
+            self.translation_var,
+        ):
+            variable.trace_add("write", self._schedule_settings_save)
 
     def _update_scroll_region(self, _event=None) -> None:
         """根据内容高度更新主窗口的可滚动范围。"""
@@ -798,26 +816,31 @@ class Application:
         if hasattr(self, "overlay"):
             self.overlay._cancel_auto_scroll()
             self.overlay.apply_settings()
+        self._schedule_settings_save()
 
     def _font_scale_changed(self, value) -> None:
         self.settings.overlay_font_size = int(float(value))
         if hasattr(self, "overlay"):
             self.overlay.apply_settings()
+        self._schedule_settings_save()
 
     def _translation_font_scale_changed(self, value) -> None:
         self.settings.overlay_translation_font_size = int(float(value))
         if hasattr(self, "overlay"):
             self.overlay.apply_settings()
+        self._schedule_settings_save()
 
     def _background_opacity_scale_changed(self, value) -> None:
         self.settings.overlay_background_opacity = float(value)
         if hasattr(self, "overlay"):
             self.overlay.apply_settings()
+        self._schedule_settings_save()
 
     def _text_opacity_scale_changed(self, value) -> None:
         self.settings.overlay_text_opacity = float(value)
         if hasattr(self, "overlay"):
             self.overlay.apply_settings()
+        self._schedule_settings_save()
 
     def _apply_overlay_settings(self) -> None:
         if hasattr(self, "_topmost_var"):
@@ -828,9 +851,18 @@ class Application:
             self.settings.overlay_animation = self._animation_var.get()
         if hasattr(self, "overlay"):
             self.overlay.apply_settings()
+        self._schedule_settings_save()
 
     def _show_overlay(self) -> None:
         self.overlay.show()
+
+    def _hide_settings(self) -> None:
+        """关闭设置窗＝隐藏；识别和悬浮窗继续运行。"""
+        self._schedule_settings_save()
+        try:
+            self.root.withdraw()
+        except tk.TclError:
+            pass
 
     def _show_settings(self) -> None:
         self.root.deiconify()
@@ -869,6 +901,27 @@ class Application:
             self.overlay.persist_geometry()
         self.settings.save()
         self._set_status("设置已保存。")
+
+    def _schedule_settings_save(self, *_args) -> None:
+        """设置变更后防抖保存，避免每次拖动都写盘。"""
+        if getattr(self, "_settings_save_after_id", None) is not None:
+            try:
+                self.root.after_cancel(self._settings_save_after_id)
+            except tk.TclError:
+                pass
+        try:
+            self._settings_save_after_id = self.root.after(400, self._settings_save_debounced)
+        except tk.TclError:
+            pass
+
+    def _settings_save_debounced(self) -> None:
+        self._settings_save_after_id = None
+        if self._closing:
+            return
+        try:
+            self._save_settings()
+        except Exception:
+            pass
 
     def _set_status(self, text: str) -> None:
         self.status_var.set(text)

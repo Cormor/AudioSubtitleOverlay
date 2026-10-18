@@ -13,8 +13,8 @@ from typing import Callable, Iterable, Sequence
 
 # 同一段落内原文与译文之间的纵向间距（逻辑像素）。
 PAIR_GAP = 4
-# 相邻字幕段之间的纵向间距（逻辑像素）。
-GROUP_GAP = 12
+# 相邻字幕段之间的纵向间距（逻辑像素）。分组要一眼能分开。
+GROUP_GAP = 18
 # 顶部留白（逻辑像素）。
 TOP_PADDING = 12
 # 历史区与底部固定区之间的呼吸间距（逻辑像素）。
@@ -183,7 +183,11 @@ class ReadingCursor:
 
 
 class TranslationLaneState:
-    """自动模式只在持续原文更新中，连续五秒无译文输出后收起。"""
+    """译文栏显隐：采集进行中保持两栏，避免译文滞后把左右栏拆散。
+
+    只有「原文已停一段时间 + 本轮始终没译文」才收起；一旦有过译文输出
+    就保持栏位，不再在单栏/双栏之间跳。
+    """
 
     timeout = 5.0
 
@@ -193,6 +197,7 @@ class TranslationLaneState:
         self.visible = True
         self.missing_since = None
         self.last_source_at = None
+        self.got_translation = False
 
     def configure(self, source, target, automatic):
         # 自动检测结果抖动不重置计时；仅用户选择的模式/目标变化才重置。
@@ -203,25 +208,46 @@ class TranslationLaneState:
             self.reset()
 
     def reset(self):
-        self.visible = self.automatic or self.context is None or self.context[0] != self.context[1]
+        self.visible = self._should_be_visible()
         self.missing_since = None
         self.last_source_at = None
+        self.got_translation = False
+
+    def _should_be_visible(self) -> bool:
+        if self.automatic or self.context is None:
+            return True
+        return self.context[0] != self.context[1]
 
     def source_updated(self, now):
-        if not self.automatic:
-            return
-        if self.last_source_at is None or now - self.last_source_at > self.timeout:
-            self.missing_since = now
+        # 原文持续到达 = 正在采集；保持译文栏，不在此处收起。
         self.last_source_at = now
         if self.missing_since is None:
             self.missing_since = now
-        if now >= self.missing_since + self.timeout:
-            self.visible = False
+        if self._should_be_visible():
+            self.visible = True
 
     def translation_output(self, now):
-        if self.automatic:
-            self.visible = True
-            self.missing_since = now
+        if not self._should_be_visible():
+            return
+        self.visible = True
+        self.missing_since = now
+        self.got_translation = True
+
+    def maybe_collapse_if_idle(self, now) -> bool:
+        """原文已停、且本轮始终无译文时才收起；返回是否发生显隐变化。"""
+        if not self._should_be_visible():
+            return False
+        if self.got_translation:
+            return False
+        if self.last_source_at is None:
+            return False
+        if now - self.last_source_at < self.timeout:
+            return False
+        if self.missing_since is not None and now >= self.missing_since + self.timeout:
+            if self.visible:
+                self.visible = False
+                return True
+        return False
 
 
 def reading_window_height(preferred, source_row, translation_row, bilingual):
@@ -239,20 +265,20 @@ def paired_window_height(source_height, source_row, translation_row):
     return 98 + max(source_row, source_height - 68) * (source_row + translation_row) / source_row
 
 
-def scrollbar_geometry(width, height, content_height, tail, offset):
+def scrollbar_geometry(width, height, content_height, tail, offset, left=None):
     track = max(12, height - 64)
     thumb = min(track, max(16, track * max(height - 50, 1) / max(content_height, 1)))
     travel = track - thumb
     top = 12 + travel * max(0, min(offset, tail)) / max(tail, 1)
-    return {"left": width - 20, "right": width, "top": 12, "bottom": 12 + track,
+    bar_left = (width - 20) if left is None else left
+    return {"left": bar_left, "right": bar_left + 20, "top": 12, "bottom": 12 + track,
             "thumb_top": top, "thumb_height": thumb, "travel": travel}
 
 
 def reading_positions(lines, viewport_top, viewport_bottom, scale, show_translation, row_heights, cursors=None, now=0.0, dwell=0.0, translation_current=True):
-    """实时阅读使用独立、固定的语言区域；只在整行溢出时推进。
+    """实时阅读：上下两栏（原文在上、译文在下），共享推进节奏。
 
-    历史浏览仍按段落成对排列。实时区域保留最近完整行，不把整个长段落
-    绑在窗口底部；迟到的译文和新段落都不能改变原文区的基线。
+    两栏同一阅读游标一起前进，避免译文还没出就整块空白。
     """
     source = [i for i, line in enumerate(lines) if line["style"] == "source"]
     translation = [i for i, line in enumerate(lines) if line["style"] == "translation"] if translation_current else []
@@ -263,7 +289,6 @@ def reading_positions(lines, viewport_top, viewport_bottom, scale, show_translat
         source_row = row_heights["source"]
         translation_row = row_heights["translation"]
         usable = max(0, available - header * 2 - gap)
-        # 相同的可见行数，比固定百分比更适合不同字号的双语字幕。
         source_height = usable * source_row / (source_row + translation_row)
         split = viewport_top + header + source_height + gap
         lanes = {"source": (viewport_top + header, split - gap),
@@ -274,21 +299,58 @@ def reading_positions(lines, viewport_top, viewport_bottom, scale, show_translat
         labels = {"source": viewport_top}
     positions = {}
     due_times = []
-    for style, indices in (("source", source), ("translation", translation)):
-        if style not in lanes or not indices:
-            continue
-        top, bottom = lanes[style]
-        row_height = lines[indices[-1]]["height"]
-        capacity = max(0, int((bottom - top + 0.01) // row_height))
-        if not capacity:
-            continue
-        start = max(0, len(indices) - capacity)
-        if cursors is not None:
-            start, due = cursors[style].select(len(indices), capacity, now, dwell)
+    if show_translation and source and translation:
+        # 共享推进：同一行窗，译文不足时用自身末尾，避免整栏空白。
+        source_row = row_heights["source"]
+        translation_row = row_heights["translation"]
+        source_span = lanes["source"][1] - lanes["source"][0]
+        if source_span < source_row * 0.5:
+            return {"reading_positions": {}, "reading_lanes": lanes,
+                    "reading_labels": labels, "next_reading_due": None}
+        capacity = max(1, int((source_span + 0.01) // source_row))
+        total = max(len(source), len(translation))
+        start = max(0, total - capacity)
+        if cursors is not None and "source" in cursors:
+            start, due = cursors["source"].select(total, capacity, now, dwell)
             if due is not None:
                 due_times.append(due)
-        for row, index in enumerate(indices[start:start + capacity]):
-            positions[index] = top + row * row_height
+            if "translation" in cursors:
+                cursors["translation"].start = start
+                cursors["translation"].advanced_at = cursors["source"].advanced_at
+        top_s, bottom_s = lanes["source"]
+        top_t, bottom_t = lanes["translation"]
+        if bottom_t <= top_t:
+            bottom_t = top_t + translation_row
+        for row in range(capacity):
+            y = top_s + row * source_row
+            if y + source_row <= bottom_s + 0.01 and start + row < len(source):
+                positions[source[start + row]] = y
+        if len(translation) <= capacity:
+            visible = translation
+        else:
+            visible = translation[start:start + capacity]
+            if len(visible) < capacity:
+                visible = translation[-capacity:]
+        for row, index in enumerate(visible[:capacity]):
+            y = top_t + row * translation_row
+            if y + translation_row <= bottom_t + 0.01:
+                positions[index] = y
+    else:
+        for style, indices in (("source", source), ("translation", translation)):
+            if style not in lanes or not indices:
+                continue
+            top, bottom = lanes[style]
+            row_height = lines[indices[-1]]["height"]
+            capacity = max(0, int((bottom - top + 0.01) // row_height))
+            if not capacity:
+                continue
+            start = max(0, len(indices) - capacity)
+            if cursors is not None:
+                start, due = cursors[style].select(len(indices), capacity, now, dwell)
+                if due is not None:
+                    due_times.append(due)
+            for row, index in enumerate(indices[start:start + capacity]):
+                positions[index] = top + row * row_height
     return {"reading_positions": positions, "reading_lanes": lanes,
             "reading_labels": labels,
             "next_reading_due": min(due_times) if due_times else None}
@@ -302,32 +364,19 @@ def build_lines(
     show_translation: bool,
     ledger: ParagraphLedger,
     measure: Callable[[str], float] | dict[str, Callable[[str], float]],
+    column_gap: float = 20.0,
 ) -> tuple[list[dict], int]:
-    """把字幕组堆叠成行；返回行列表和内容总高度（逻辑像素）。
+    """上下栏排版：每条先原文后译文，共用一条滚动条同步滚。
 
-    measure 可以是单个度量函数，也可以按样式名提供不同字体的度量函数。
+    译文未到时占位一行「（翻译中…）」，避免译文区大片空白。
+    column_gap 保留参数兼容，上下布局不使用。
     """
+    del column_gap
     measure_fns = measure if isinstance(measure, dict) else None
-    paragraphs: list[tuple[str, str, int | None, bool]] = []
-    for entry_index, entry in enumerate(entries):
-        if entry.source:
-            paragraphs.append((entry.source, "source", entry_index, entry.draft))
-        if show_translation and entry.translation:
-            # 译文作为独立段落排版，不与原文共用同一行。
-            paragraphs.append((entry.translation, "translation", entry_index, False))
-    if not paragraphs:
-        paragraphs = [("等待识别", "source", None, False)]
 
-    lines: list[dict] = []
-    active_keys: set[tuple] = set()
-    y = TOP_PADDING * scale
-    previous_entry: int | None = None
-    previous_style: str | None = None
-    for paragraph, style, entry_index, draft in paragraphs:
+    def _wrap(style: str, paragraph: str, key: tuple):
         metrics = styles[style]
-        key = (entries[entry_index].key if entry_index is not None and entries[entry_index].key is not None else entry_index, style)
-        active_keys.add(key)
-        records, _displayed = ledger.records(
+        return ledger.records(
             key,
             paragraph,
             style,
@@ -335,18 +384,11 @@ def build_lines(
             wrap_width,
             measure_fns[style] if measure_fns is not None else measure,
         )
+
+    def _append(style, records, entry_index, entry, y, row, draft=False):
+        out = []
         for line_index, record in enumerate(records):
-            if line_index == 0 and lines:
-                # 同一组内原文到译文用小间距；跨组用大间距，成对阅读不串段。
-                gap_before = (
-                    PAIR_GAP * scale
-                    if entry_index == previous_entry and style != previous_style
-                    else GROUP_GAP * scale
-                )
-            else:
-                gap_before = 0
-            y += gap_before
-            lines.append({
+            out.append({
                 "text": record["text"],
                 "style": style,
                 "entry": entry_index,
@@ -354,13 +396,72 @@ def build_lines(
                 "char_start": record["start"],
                 "char_end": record["end"],
                 "y": y,
-                "height": metrics.line_height,
-                "gap_before": gap_before,
+                "height": row,
+                "gap_before": 0,
                 "draft": draft,
+                "x": 0.0,
             })
-            y += metrics.line_height
-            previous_entry = entry_index
-            previous_style = style
+            y += row
+        return out, y
+
+    lines: list[dict] = []
+    active_keys: set[tuple] = set()
+    y = TOP_PADDING * scale
+    if not entries:
+        key = (None, "source")
+        active_keys.add(key)
+        records, _ = _wrap("source", "等待识别", key)
+        row = styles["source"].line_height
+        block, y = _append("source", records, None, EntryView("等待识别", ""), y, row)
+        lines.extend(block)
+        ledger.prune(active_keys)
+        return lines, round(y / scale) + 4
+
+    source_row = styles["source"].line_height
+    translation_row = styles["translation"].line_height
+
+    for entry_index, entry in enumerate(entries):
+        entry_key = entry.key if entry.key is not None else entry_index
+        source_records = []
+        translation_records = []
+        if entry.source:
+            key = (entry_key, "source")
+            active_keys.add(key)
+            source_records, _ = _wrap("source", entry.source, key)
+        if show_translation and entry.translation:
+            key = (entry_key, "translation")
+            active_keys.add(key)
+            translation_records, _ = _wrap("translation", entry.translation, key)
+        if not source_records and not translation_records:
+            key = (entry_key, "source")
+            active_keys.add(key)
+            source_records, _ = _wrap("source", entry.source or "等待识别", key)
+
+        if lines:
+            y += GROUP_GAP * scale
+
+        if source_records:
+            block, y = _append("source", source_records, entry_index, entry, y, source_row, entry.draft)
+            lines.extend(block)
+
+        if show_translation:
+            if translation_records:
+                y += PAIR_GAP * scale
+                block, y = _append(
+                    "translation", translation_records, entry_index, entry,
+                    y, translation_row, False,
+                )
+                lines.extend(block)
+            elif entry.source:
+                # 译文未到：占位一行，滚动时仍能看出在等哪句。
+                y += PAIR_GAP * scale
+                block, y = _append(
+                    "translation",
+                    [{"text": "（翻译中…）", "start": 0, "end": 5}],
+                    entry_index, entry, y, translation_row, True,
+                )
+                lines.extend(block)
+
     ledger.prune(active_keys)
     return lines, round(y / scale) + 4
 
@@ -397,15 +498,16 @@ def compute_geometry(
     footer_top = viewport_bottom
     footer_height = 0.0
     if footer_active:
-        # 组内保持原文在上、译文在下；整组锚定在视口底部。
-        footer_y = viewport_bottom
-        for index in reversed(footer_indices):
-            line = lines[index]
-            footer_y -= line["height"]
-            footer_positions[index] = footer_y
-            footer_y -= line["gap_before"]
-        footer_top = footer_positions[footer_indices[0]]
-        footer_height = viewport_bottom - footer_top
+        # 双栏：同一条目左右并排，按相对 y 铺开；整组锚定在视口底部。
+        footer_min_y = min(lines[index]["y"] for index in footer_indices)
+        footer_max_bottom = max(
+            lines[index]["y"] + lines[index]["height"] for index in footer_indices
+        )
+        group_height = footer_max_bottom - footer_min_y
+        footer_top = viewport_bottom - group_height
+        footer_height = group_height
+        for index in footer_indices:
+            footer_positions[index] = footer_top + (lines[index]["y"] - footer_min_y)
 
     line_starts = [
         max(0, round((line["y"] - TOP_PADDING * scale) / scale))
@@ -450,6 +552,28 @@ def compute_geometry(
             (viewport_bottom - viewport_top) // min(line_heights)
         ),
     )
+
+    def _style_scroll(style: str):
+        exclude = set(footer_indices) if footer_active else set()
+        items = [
+            (index, line) for index, line in enumerate(lines)
+            if line["style"] == style and index not in exclude
+        ]
+        if not items:
+            return 0, []
+        last = max(items, key=lambda pair: pair[1]["y"] + pair[1]["height"])
+        style_tail = max(
+            0,
+            round((last[1]["y"] + last[1]["height"] - viewport_bottom) / scale),
+        )
+        starts = [
+            max(0, round((line["y"] - TOP_PADDING * scale) / scale))
+            for _index, line in items
+        ]
+        return style_tail, starts
+
+    source_tail, source_starts = _style_scroll("source")
+    translation_tail, translation_starts = _style_scroll("translation")
     return {
         "footer_indices": footer_indices,
         "footer_positions": footer_positions,
@@ -459,7 +583,11 @@ def compute_geometry(
         "line_starts": line_starts,
         "tail_offset": tail_offset,
         "scroll_line_starts": scroll_line_starts,
-        "scrollable": tail_offset > 0,
+        "source_tail_offset": source_tail,
+        "source_scroll_line_starts": source_starts,
+        "translation_tail_offset": translation_tail,
+        "translation_scroll_line_starts": translation_starts,
+        "scrollable": tail_offset > 0 or source_tail > 0 or translation_tail > 0,
         "visible_line_capacity": visible_line_capacity,
         "content_height": content_height,
     }
@@ -496,22 +624,37 @@ def fit_rows_height(
         return max(minimum, min(hard, minimum))
     footer_set = set(footer_indices) if footer_active else set()
     total = float(bottom_padding * scale)
-    pending_gap = 0.0
-    # 1) 最新字幕组必须完整可见：正文与译文永远同区同高，不受上限截断。
-    for index in reversed(list(footer_indices)):
-        line = lines[index]
-        total += line["height"] + pending_gap
-        pending_gap = line["gap_before"]
-    # 2) 历史行自底向上扩展，受 maximum 限制。
+    # 1) 最新字幕组必须完整可见：双栏同高并排，高度按组盒计算。
+    if footer_indices:
+        footer_min_y = min(lines[index]["y"] for index in footer_indices)
+        footer_max_bottom = max(
+            lines[index]["y"] + lines[index]["height"] for index in footer_indices
+        )
+        total += footer_max_bottom - footer_min_y
+    # 2) 历史行按条目盒向上扩展（双栏同 y 只计一次），受 maximum 限制。
+    entry_boxes: dict = {}
     for index in range(len(lines) - 1, -1, -1):
         if index in footer_set:
             continue
         line = lines[index]
-        extra = line["height"] + pending_gap
+        entry = line["entry"]
+        y0 = line["y"]
+        y1 = y0 + line["height"]
+        if entry not in entry_boxes:
+            entry_boxes[entry] = [y0, y1, line["gap_before"]]
+        else:
+            box = entry_boxes[entry]
+            box[0] = min(box[0], y0)
+            box[1] = max(box[1], y1)
+    # 从最近的条目往回累加
+    pending_gap = GROUP_GAP * scale
+    for entry in sorted(entry_boxes.keys(), reverse=True):
+        y0, y1, _gap = entry_boxes[entry]
+        extra = (y1 - y0) + pending_gap
         if total + extra > (maximum - top_padding) * scale:
             break
         total += extra
-        pending_gap = line["gap_before"]
+        pending_gap = 0.0
     height = round((top_padding * scale + total) / scale)
     return max(minimum, min(hard, height))
 

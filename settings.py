@@ -38,14 +38,14 @@ class Settings:
     loopback_device: str = ""
     translation_enabled: bool = True
     translation_backend: str = "本地优先，失败转在线"
-    overlay_background: str = "#101827"
+    overlay_background: str = "#152033"
     overlay_text_color: str = "#ffffff"
     overlay_outline: str = "#000000"
     overlay_translation_text_color: str = "#b8d7ff"
     overlay_translation_outline: str = "#000000"
-    overlay_background_opacity: float = 0.92
+    overlay_background_opacity: float = 0.78
     overlay_text_opacity: float = 1.0
-    overlay_scroll_interval: float = 3.0
+    overlay_scroll_interval: float = 1.8
     overlay_font_size: int = 24
     overlay_translation_font_size: int = 20
     overlay_topmost: bool = True

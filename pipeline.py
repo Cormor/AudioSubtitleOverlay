@@ -127,6 +127,8 @@ class LivePipeline:
         self._translation_failures = 0
         self._last_translation_error_at = 0.0
         self._translation_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="翻译")
+        self._translation_service = None
+        self._translation_service_backend = None
 
     def start(self) -> None:
         """启动后台流水线。"""
@@ -528,11 +530,18 @@ class LivePipeline:
             if not self._is_configuration_current(generation) or not self._translation_allowed(source_language):
                 continue
             try:
-                service = TranslationService(
-                    translation_backend,
-                    on_status=self._on_status,
+                if (
+                    self._translation_service is None
+                    or self._translation_service_backend != translation_backend
+                ):
+                    self._translation_service = TranslationService(
+                        translation_backend,
+                        on_status=self._on_status,
+                    )
+                    self._translation_service_backend = translation_backend
+                translated = self._translation_service.translate(
+                    text, source_language, target_language
                 )
-                translated = service.translate(text, source_language, target_language)
             except Exception as error:
                 if not self._is_configuration_current(generation) or not self._translation_allowed(source_language):
                     continue

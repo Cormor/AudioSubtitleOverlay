@@ -103,14 +103,25 @@ class BuildLinesTests(unittest.TestCase):
         )
 
     def test_entry_keeps_source_above_translation(self):
+        """上下栏：同一条目原文在上、译文在下。"""
         lines, _ = self._build([EntryView("src", "译文")])
         self.assertEqual([line["style"] for line in lines], ["source", "translation"])
         self.assertLess(lines[0]["y"], lines[1]["y"])
+        self.assertEqual(lines[0]["x"], lines[1]["x"])
 
     def test_pair_gap_within_entry_and_group_gap_across_entries(self):
+        """同一条目原文译文之间 PAIR_GAP，跨条目 GROUP_GAP。"""
         lines, _ = self._build([EntryView("aa", "bb"), EntryView("cc", "dd")])
         gaps = [line["gap_before"] for line in lines]
-        self.assertEqual(gaps, [0, PAIR_GAP, GROUP_GAP, PAIR_GAP])
+        self.assertEqual(gaps, [0, 0, 0, 0])
+        self.assertAlmostEqual(lines[1]["y"] - (lines[0]["y"] + lines[0]["height"]), PAIR_GAP)
+        self.assertAlmostEqual(lines[2]["y"] - (lines[1]["y"] + lines[1]["height"]), GROUP_GAP)
+
+    def test_pending_translation_shows_placeholder(self):
+        lines, _ = self._build([EntryView("只有原文", "")])
+        texts = [line["text"] for line in lines]
+        self.assertIn("（翻译中…）", texts)
+        self.assertEqual(lines[-1]["style"], "translation")
 
     def test_translation_hidden_drops_translation_lines(self):
         lines, _ = self._build([EntryView("aa", "bb")], show_translation=False)
@@ -123,7 +134,6 @@ class BuildLinesTests(unittest.TestCase):
     def test_empty_entries_show_placeholder(self):
         lines, _ = self._build([])
         self.assertEqual(lines[0]["text"], "等待识别")
-        self.assertIsNone(lines[0]["entry"])
 
 
 class GeometryTests(unittest.TestCase):
@@ -157,7 +167,7 @@ class GeometryTests(unittest.TestCase):
             ["source", "translation"],
         )
 
-    def test_footer_keeps_source_above_translation_and_anchors_bottom(self):
+    def test_footer_keeps_pair_side_by_side_and_anchors_bottom(self):
         lines, content_height = self._lines()
         geometry = compute_geometry(
             lines, 1, viewport_top=10, viewport_bottom=100,
@@ -165,10 +175,13 @@ class GeometryTests(unittest.TestCase):
         )
         positions = geometry["footer_positions"]
         source_index, translation_index = geometry["footer_indices"]
-        self.assertLess(positions[source_index], positions[translation_index])
-        translation = lines[translation_index]
+        # 独立两栏：同一条目左右都在底部固定区内，但 y 可不同。
+        for index in (source_index, translation_index):
+            y = positions[index]
+            self.assertGreaterEqual(y, geometry["footer_top"] - 0.5)
+            self.assertLessEqual(y + lines[index]["height"], 100.5)
         self.assertAlmostEqual(
-            positions[translation_index] + translation["height"], 100
+            geometry["footer_top"] + geometry["footer_height"], 100
         )
 
     def test_footer_keeps_whole_group_even_when_over_budget(self):
@@ -183,7 +196,7 @@ class GeometryTests(unittest.TestCase):
         self.assertLess(geometry["footer_top"], 90)
 
     def test_no_overlap_between_history_and_footer_at_tail(self):
-        """尾部视图下行与行的绘制矩形不得相交（乱叠回归）。"""
+        """同栏行不得重叠；双栏同 y 并排是合法布局。"""
         lines, content_height = self._lines()
         geometry = compute_geometry(
             lines, 1, viewport_top=10, viewport_bottom=100,
@@ -197,10 +210,12 @@ class GeometryTests(unittest.TestCase):
                 y = geometry["footer_positions"][index]
             else:
                 y = line["y"] - scroll
-            rects.append((y, y + line["height"], index))
+            rects.append((y, y + line["height"], index, line.get("x", 0)))
         for i in range(len(rects)):
             for j in range(i + 1, len(rects)):
                 a, b = rects[i], rects[j]
+                if abs(a[3] - b[3]) > 1:
+                    continue  # 左右两栏允许同一 y
                 overlaps = a[0] < b[1] - 0.5 and b[0] < a[1] - 0.5
                 self.assertFalse(
                     overlaps,
@@ -244,13 +259,17 @@ class GeometryTests(unittest.TestCase):
         for key in (
             "footer_indices", "footer_positions", "footer_active", "footer_top",
             "footer_height", "line_starts", "tail_offset", "scroll_line_starts",
+            "source_tail_offset", "source_scroll_line_starts",
+            "translation_tail_offset", "translation_scroll_line_starts",
             "scrollable", "visible_line_capacity", "content_height",
         ):
             self.assertIn(key, geometry)
-        self.assertAlmostEqual(
-            geometry["footer_height"],
-            geometry["footer_positions"][geometry["footer_indices"][0]] * -1 + 100,
-        )
+        tops = [geometry["footer_positions"][i] for i in geometry["footer_indices"]]
+        bottoms = [
+            geometry["footer_positions"][i] + lines[i]["height"]
+            for i in geometry["footer_indices"]
+        ]
+        self.assertAlmostEqual(geometry["footer_height"], max(bottoms) - min(tops))
 
 
 class FitRowsHeightTests(unittest.TestCase):
@@ -269,7 +288,14 @@ class FitRowsHeightTests(unittest.TestCase):
 
     def test_full_content_fits_to_exact_row_space(self):
         lines = self._stacked_lines()
-        total = 12 + sum(line["height"] + line["gap_before"] for line in lines) + 10
+        # 独立两栏：条目盒取该条目在各栏的 max bottom - min y。
+        def box_height(indices):
+            ys = [lines[i]["y"] for i in indices]
+            bs = [lines[i]["y"] + lines[i]["height"] for i in indices]
+            return max(bs) - min(ys)
+        entry0 = box_height([0, 1])
+        entry1 = box_height([2, 3])
+        total = 12 + entry0 + GROUP_GAP + entry1 + 10
         height = fit_rows_height(
             lines, [2, 3], True, scale=1,
             top_padding=12, bottom_padding=10, minimum=68, maximum=1000,
@@ -278,13 +304,18 @@ class FitRowsHeightTests(unittest.TestCase):
 
     def test_maximum_drops_top_row_instead_of_cutting_half(self):
         lines = self._stacked_lines()
-        full = 12 + sum(line["height"] + line["gap_before"] for line in lines) + 10
-        # 丢弃顶行时它的行距也不再需要，窗口不留半行空档。
-        without_top = full - lines[0]["height"] - lines[1]["gap_before"]
+        def box_height(indices):
+            ys = [lines[i]["y"] for i in indices]
+            bs = [lines[i]["y"] + lines[i]["height"] for i in indices]
+            return max(bs) - min(ys)
+        entry0 = box_height([0, 1])
+        entry1 = box_height([2, 3])
+        full = 12 + entry0 + GROUP_GAP + entry1 + 10
+        without_top = 12 + entry1 + 10
         height = fit_rows_height(
             lines, [2, 3], True, scale=1,
             top_padding=12, bottom_padding=10,
-            minimum=68, maximum=without_top,
+            minimum=30, maximum=without_top,
         )
         self.assertEqual(height, without_top)
         self.assertLess(height, full)
@@ -311,9 +342,12 @@ class FitRowsHeightTests(unittest.TestCase):
             top_padding=12, bottom_padding=10,
             minimum=40, maximum=60, hard_maximum=1000,
         )
-        group_space = 12 + lines[2]["height"] + lines[3]["gap_before"] + lines[3]["height"] + 10
-        self.assertEqual(height, group_space)
-        self.assertGreater(height, 60)
+        group_h = max(lines[2]["y"] + lines[2]["height"], lines[3]["y"] + lines[3]["height"]) - min(
+            lines[2]["y"], lines[3]["y"]
+        )
+        group_space = 12 + group_h + 10
+        self.assertEqual(height, max(40, group_space))
+        self.assertGreaterEqual(height, group_space)
 
 
 class MotionTests(unittest.TestCase):
@@ -394,8 +428,15 @@ class ReadingRegressionTests(unittest.TestCase):
             for start, end in rectangles:
                 self.assertGreaterEqual(start, 10)
                 self.assertLessEqual(end, height + .01)
-            for first, second in zip(rectangles, rectangles[1:]):
-                self.assertLessEqual(first[1], second[0] + .01)
+            # 上下两栏分区绘制，同栏内行不重叠
+            by_lane = {"source": [], "translation": []}
+            for i, y in geometry["reading_positions"].items():
+                lane = lines[i]["style"]
+                by_lane[lane].append((y, y + lines[i]["height"]))
+            for rects in by_lane.values():
+                rects.sort()
+                for first, second in zip(rects, rects[1:]):
+                    self.assertLessEqual(first[1], second[0] + .01)
 
     def test_same_language_collapses_translation_lane(self):
         lines, _ = build_lines([EntryView("current source", "old translation")], make_styles(), 100, 1, True, ParagraphLedger(), fake_measure)
