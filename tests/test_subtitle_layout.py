@@ -272,6 +272,22 @@ class GeometryTests(unittest.TestCase):
         self.assertAlmostEqual(geometry["footer_height"], max(bottoms) - min(tops))
 
 
+    def test_full_tail_includes_translation_overflow(self):
+        """成对垂直列表的 tail 必须盖住译文，否则最新译文会被裁掉。"""
+        entries = [EntryView("短原文", "很长的译文" * 40)]
+        lines, content_height = build_lines(
+            entries, make_styles(), 80, 1, True, ParagraphLedger(), fake_measure,
+        )
+        geometry = compute_geometry(
+            lines, 1, viewport_top=10, viewport_bottom=40,
+            content_height=content_height, follow_tail=False, latest_entry=0,
+        )
+        last_bottom = max(line["y"] + line["height"] for line in lines)
+        self.assertGreaterEqual(geometry["tail_offset"] + 40, last_bottom - 10)
+        self.assertGreaterEqual(geometry["tail_offset"], geometry["translation_tail_offset"])
+        self.assertGreaterEqual(geometry["tail_offset"], geometry["source_tail_offset"])
+
+
 class FitRowsHeightTests(unittest.TestCase):
     def _stacked_lines(self):
         entries = [EntryView("aa", "bb"), EntryView("cc", "dd")]

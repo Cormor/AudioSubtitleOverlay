@@ -485,15 +485,16 @@ class MyMemoryTranslator:
 
 
 def _local_models_ready(source_language: str, target_language: str) -> bool:
-    """仅检查已安装模型，不触发下载。"""
-    try:
-        pairs = _model_package_pairs(source_language, target_language)
-    except RuntimeError:
-        return False
-    return all(
-        _find_installed_model(from_code, to_code) is not None
-        for from_code, to_code, _package in pairs
-    )
+    """仅检查已安装目录，不访问网络、不触发清单下载。"""
+    if _find_installed_model(source_language, target_language) is not None:
+        return True
+    # 经英语中转时，两侧都必须已安装。
+    if source_language != "en" and target_language != "en":
+        return (
+            _find_installed_model(source_language, "en") is not None
+            and _find_installed_model("en", target_language) is not None
+        )
+    return False
 
 
 class TranslationService:
@@ -514,17 +515,18 @@ class TranslationService:
             return ""
         if not source_language or source_language == target_language:
             return text
-        # 本地模型已就绪时一律优先本地，保护在线配额。
+        # 在线-only：严格走在线，不因本地模型存在而改道。
+        if self.backend == "仅使用免费在线 MyMemory":
+            return self._online.translate(text, source_language, target_language)
+        # 纯本地：交给 Argos（必要时再下载模型）。
+        if self.backend in LOCAL_TRANSLATION_BACKENDS:
+            return self._argos.translate(text, source_language, target_language)
+        # 「本地优先，失败转在线」：仅此模式在模型已装时优先本地。
         if _local_models_ready(source_language, target_language):
             try:
                 return self._argos.translate(text, source_language, target_language)
             except Exception:
-                if self.backend in LOCAL_TRANSLATION_BACKENDS:
-                    raise
-        elif self.backend in LOCAL_TRANSLATION_BACKENDS:
-            return self._argos.translate(text, source_language, target_language)
-        if self.backend == "仅使用免费在线 MyMemory":
-            return self._online.translate(text, source_language, target_language)
+                return self._online.translate(text, source_language, target_language)
         if self._on_status:
             try:
                 self._on_status("本地翻译模型尚未就绪，本轮先用在线翻译。")

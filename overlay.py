@@ -86,6 +86,7 @@ class OverlayWindow:
         self._drag_origin = (0, 0)
         self._grip_hover = False
         self._scrollbar_show_until = 0.0
+        self._lane_idle_after_id = None
         self._geometry_origin = (0, 0, 0, 0)
         self._redraw_pending = False
         self._redraw_after = None
@@ -286,10 +287,12 @@ class OverlayWindow:
         now = time.perf_counter()
         if [entry[0] for entry in new_entries] != [entry[0] for entry in self._entries]:
             self._translation_lane_state.source_updated(now)
+            self._schedule_lane_idle_check()
         # 兼容直接调用悬浮窗的入口；正式输出用显示模块的活动序号，能识别同文新版本。
         if self._translation_activity is None and any(entry[1].strip() and (i >= len(self._entries) or entry[1] != self._entries[i][1])
                for i, entry in enumerate(new_entries)):
             self._translation_lane_state.translation_output(now)
+            self._schedule_lane_idle_check()
         # 淘汰历史头部后仍复用其余段落的换行缓存，避免每次重排全部历史。
         shift = 0
         if self._entries and new_entries and self._entries[0] != new_entries[0]:
@@ -334,7 +337,7 @@ class OverlayWindow:
         for cursor in self._reading_cursors.values():
             cursor.reset()
         self._follow_tail = True
-        self._set_scroll_position(getattr(self, "_source_tail_offset", getattr(self, "_tail_offset", 0)), style="source")
+        self._set_scroll_position(self._full_tail_offset(), style="source")
         self._set_scroll_position(getattr(self, "_trans_tail_offset", 0), style="translation")
         self._request_redraw()
 
@@ -342,25 +345,20 @@ class OverlayWindow:
         if self._auto_scroll_after is not None:
             self.window.after_cancel(self._auto_scroll_after)
             self._auto_scroll_after = None
+        if getattr(self, "_lane_idle_after_id", None) is not None:
+            try:
+                self.window.after_cancel(self._lane_idle_after_id)
+            except tk.TclError:
+                pass
+            self._lane_idle_after_id = None
 
     def _set_scroll_position(self, target: float, instant: bool = False, style: str = "source") -> None:
         """设置某一栏的滚动目标；识别更新不跳变，由动画平滑逼近。"""
-        if style == "translation":
-            motion, tail_attr, target_attr = (
-                self._trans_scroll_motion,
-                "_trans_tail_offset",
-                "_trans_scroll_target",
-            )
-        else:
-            motion, tail_attr, target_attr = (
-                self._scroll_motion,
-                "_source_tail_offset",
-                "_scroll_target",
-            )
-            tail_attr = "_source_tail_offset"
-        max_scroll = float(getattr(self, tail_attr, getattr(self, "_tail_offset", 0)))
+        del style
+        motion = self._scroll_motion
+        max_scroll = self._full_tail_offset()
         target = max(0.0, min(float(target), max_scroll))
-        setattr(self, target_attr, target)
+        self._scroll_target = target
         interval_ms = float(getattr(self.settings, "overlay_scroll_interval", 0) or 0) * 1000.0
         if interval_ms > 0:
             motion.duration_ms = min(
@@ -469,12 +467,41 @@ class OverlayWindow:
         if translation_activity is not None and translation_activity != self._translation_activity:
             if self._translation_activity is not None and translation_activity > self._translation_activity:
                 self._translation_lane_state.translation_output(time.perf_counter())
+                self._schedule_lane_idle_check()
             self._translation_activity = translation_activity
-        self._translation_lane_state.maybe_collapse_if_idle(time.perf_counter())
+        self._run_lane_idle_check()
         same = bool(source_language and source_language == target_language)
         if same != self._same_language or before != self._translation_lane_visible():
             self._same_language = same
             self._reading_cursors["translation"].reset()
+            self._layout_cache_key = None
+            self._request_redraw()
+
+    def _schedule_lane_idle_check(self) -> None:
+        """最后一次原文/译文后按 timeout 定时检查，避免只靠快照回调。"""
+        if getattr(self, "_lane_idle_after_id", None) is not None:
+            try:
+                self.window.after_cancel(self._lane_idle_after_id)
+            except tk.TclError:
+                pass
+            self._lane_idle_after_id = None
+        timeout = float(getattr(self._translation_lane_state, "timeout", 5.0) or 5.0)
+        try:
+            self._lane_idle_after_id = self.window.after(
+                max(200, int(timeout * 1000) + 50),
+                self._on_lane_idle_timer,
+            )
+        except tk.TclError:
+            pass
+
+    def _on_lane_idle_timer(self) -> None:
+        self._lane_idle_after_id = None
+        self._run_lane_idle_check()
+
+    def _run_lane_idle_check(self) -> None:
+        before = self._translation_lane_visible()
+        self._translation_lane_state.maybe_collapse_if_idle(time.perf_counter())
+        if before != self._translation_lane_visible():
             self._layout_cache_key = None
             self._request_redraw()
 
@@ -681,19 +708,23 @@ class OverlayWindow:
             # geometry 尚未经过 Tk Configure，不能提交旧尺寸位图把新尺寸改回去。
             return content_height
         self._scrollable = (
-            self._source_tail_offset > 0 or self._trans_tail_offset > 0
+            self._tail_offset > 0 or self._source_tail_offset > 0 or self._trans_tail_offset > 0
         )
         self._clamp_scroll_offset(height - 50)
         source_indices = set()
         foreground = Image.new("RGBA", (width * scale, height * scale))
         draw = ImageDraw.Draw(foreground)
         # 实时与回看统一为「原文在上 / 译文在下」成对列表。
+        # 垂直成对流用完整 tail（含译文），避免只按原文 tail 裁掉最新译文。
+        full_tail = max(
+            float(getattr(self, "_tail_offset", 0)),
+            float(getattr(self, "_source_tail_offset", 0)),
+            float(getattr(self, "_trans_tail_offset", 0)),
+        )
         if self._follow_tail:
             self._cancel_auto_scroll()
-            self._scroll_motion.snap(self._source_tail_offset)
-            self._scroll_target = self._source_tail_offset
-            self._trans_scroll_motion.snap(self._trans_tail_offset)
-            self._trans_scroll_target = self._trans_tail_offset
+            self._scroll_motion.snap(full_tail)
+            self._scroll_target = full_tail
         tag_bottom = viewport_top + 18 * scale
         last_entry = object()
         for line in lines:
@@ -750,7 +781,7 @@ class OverlayWindow:
         )
         image = Image.alpha_composite(image, foreground)
         overlay_ui = ImageDraw.Draw(image)
-        tail = getattr(self, "_source_tail_offset", self._tail_offset)
+        tail = self._full_tail_offset()
         # 隐藏式滚动条：悬停/滚轮时才出现，不改悬浮窗底色。
         show_bar = (
             tail > 0
@@ -862,18 +893,29 @@ class OverlayWindow:
 
     def _clamp_scroll_offset(self, viewport_height: int) -> None:
         del viewport_height
-        max_scroll = float(getattr(self, "_source_tail_offset", getattr(self, "_tail_offset", 0)))
+        max_scroll = max(
+            float(getattr(self, "_tail_offset", 0)),
+            float(getattr(self, "_source_tail_offset", 0)),
+            float(getattr(self, "_trans_tail_offset", 0)),
+        )
         self._scroll_target = max(0.0, min(float(self._scroll_target), max_scroll))
         if self._scroll_motion.value > max_scroll:
             self._scroll_motion.snap(max_scroll)
         self._scroll_motion.set_target(self._scroll_target)
 
+    def _full_tail_offset(self) -> float:
+        return max(
+            float(getattr(self, "_tail_offset", 0)),
+            float(getattr(self, "_source_tail_offset", 0)),
+            float(getattr(self, "_trans_tail_offset", 0)),
+        )
+
     def _scrollbar_geometry(self, style: str = "source"):
-        # 上下栏共用一条滚动条（原文流的滚动范围即整页）。
+        # 垂直成对列表：一根滚动条覆盖完整内容（含译文）。
         del style
         width = self.canvas.winfo_width()
         height = self.canvas.winfo_height()
-        tail = getattr(self, "_source_tail_offset", self._tail_offset)
+        tail = self._full_tail_offset()
         offset = tail if self._follow_tail else self._scroll_motion.value
         return scrollbar_geometry(width, height, self._content_height, tail, offset)
 
@@ -882,7 +924,7 @@ class OverlayWindow:
         self._reveal_scrollbar()
         bar = self._scrollbar_geometry()
         fraction = (y - self._scrollbar_grab - bar["top"]) / max(bar["travel"], 1)
-        tail = getattr(self, "_source_tail_offset", self._tail_offset)
+        tail = self._full_tail_offset()
         self._scroll_target = max(0.0, min(1.0, fraction)) * tail
         self._scroll_motion.snap(self._scroll_target)
         self._follow_tail = False
@@ -897,7 +939,7 @@ class OverlayWindow:
             self.window.winfo_y(),
         )
         bar = self._scrollbar_geometry()
-        tail = getattr(self, "_source_tail_offset", self._tail_offset)
+        tail = self._full_tail_offset()
         if tail > 0 and bar["left"] <= event.x <= bar["right"] and bar["top"] <= event.y <= bar["bottom"]:
             self._drag_mode = "scrollbar"
             self._active_scroll_style = "source"
@@ -945,7 +987,7 @@ class OverlayWindow:
             if style == "translation":
                 at_end = self._trans_scroll_target >= self._trans_tail_offset - 0.5
             else:
-                at_end = self._scroll_target >= self._source_tail_offset - 0.5
+                at_end = self._scroll_target >= self._full_tail_offset() - 0.5
             if at_end:
                 self._scroll_to_latest()
             self._request_redraw()
@@ -961,7 +1003,7 @@ class OverlayWindow:
 
     def _on_motion(self, event) -> None:
         bar = self._scrollbar_geometry()
-        tail = getattr(self, "_source_tail_offset", self._tail_offset)
+        tail = self._full_tail_offset()
         near_bar = (
             tail > 0
             and bar["left"] - 8 <= event.x <= bar["right"] + 8
@@ -987,7 +1029,7 @@ class OverlayWindow:
     def _on_mouse_wheel(self, event) -> None:
         """上下栏共用一条滚动：滚轮整页同步移动。"""
         self._reveal_scrollbar()
-        tail = getattr(self, "_source_tail_offset", self._tail_offset)
+        tail = self._full_tail_offset()
         if tail <= 0:
             return
         self._cancel_auto_scroll()

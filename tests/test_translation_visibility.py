@@ -65,6 +65,17 @@ class TranslationVisibilityTests(unittest.TestCase):
         s.configure('zh','zh',False);self.assertFalse(s.visible)
         s.configure('en','zh',False);self.assertTrue(s.visible)
 
+    def test_idle_timer_path_collapses_without_further_snapshots(self):
+        """运行时定时路径：原文停住后由 timer 收起，不依赖新快照。"""
+        s = self.state()
+        for t in (0, 1, 2):
+            s.source_updated(t)
+        self.assertTrue(s.visible)
+        # 模拟 Tk after 到期：到 timeout+ε 后由 maybe_collapse 收起
+        changed = s.maybe_collapse_if_idle(2 + TranslationLaneState.timeout + 0.2)
+        self.assertTrue(changed)
+        self.assertFalse(s.visible)
+
     def test_same_text_new_translation_version_is_an_output(self):
         m=DisplayModule(None,'zh');m.apply_source(1,'hello','en',1);m.apply_translation(1,'你好','zh')
         first=m.snapshot().translation_activity
