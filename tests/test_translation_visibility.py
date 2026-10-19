@@ -185,3 +185,71 @@ class OverlayIdleTimerTests(unittest.TestCase):
         OverlayWindow._schedule_lane_idle_check(stub)
         self.assertNotIn(first, stub.window.jobs)
         self.assertTrue(stub.window.jobs)
+
+
+class OverlayIdleTkRuntimeTests(unittest.TestCase):
+    """真 Tk 路径：window.after 到期后收起译文栏（无显示环境则 skip）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import tkinter as tk
+        try:
+            cls.root = tk.Tk()
+            cls.root.withdraw()
+            cls.tk_ok = True
+        except Exception:
+            cls.root = None
+            cls.tk_ok = False
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.root is not None:
+            try:
+                cls.root.destroy()
+            except Exception:
+                pass
+
+    def test_tk_after_timer_collapses_lane(self):
+        if not self.tk_ok:
+            self.skipTest("无图形显示，跳过真 Tk 路径")
+        from types import SimpleNamespace
+        from overlay import OverlayWindow
+
+        lane = TranslationLaneState()
+        lane.timeout = 0.15  # 测试用短 timeout
+        lane.configure(None, "zh", True)
+        redraws = []
+        stub = SimpleNamespace(
+            window=self.root,
+            _translation_lane_state=lane,
+            _lane_idle_after_id=None,
+            _layout_cache_key="x",
+            _translation_lane_visible=lambda: bool(lane.visible),
+            _request_redraw=lambda: redraws.append(1),
+        )
+        for name in (
+            "_cancel_lane_idle_check",
+            "_schedule_lane_idle_check",
+            "_on_lane_idle_timer",
+            "_run_lane_idle_check",
+        ):
+            setattr(stub, name, getattr(OverlayWindow, name).__get__(stub))
+
+        # 模拟「最后一次 source 更新后无译文」
+        lane.source_updated(0.0)
+        self.assertTrue(lane.visible)
+        stub._schedule_lane_idle_check()
+        self.assertIsNotNone(stub._lane_idle_after_id)
+
+        # 驱动真实 after 回调（timeout 0.15s，等 400ms 足够）
+        deadline = 1.0
+        waited = 0.0
+        step = 0.02
+        while waited < deadline and lane.visible:
+            self.root.update()
+            self.root.after(int(step * 1000))
+            self.root.update()
+            waited += step
+
+        self.assertFalse(lane.visible, "真 Tk 定时到期后应收起译文栏")
+        self.assertTrue(redraws, "收起后应请求重绘")
