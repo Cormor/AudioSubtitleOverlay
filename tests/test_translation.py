@@ -124,6 +124,31 @@ class TranslationBackendRoutingTests(unittest.TestCase):
         with patch("translation._local_models_ready", return_value=False):
             self.assertEqual(service.translate("hello", "en", "zh"), "在线译文")
 
+    def test_online_only_never_probes_local_readiness(self):
+        """在线-only 不得做本地 readiness，更不得改道本地。"""
+        service = TranslationService("仅使用免费在线 MyMemory")
+        service._argos = _FakeLocalTranslator("不应走本地")
+        service._online = _FakeOnlineTranslator("在线译文")
+        with patch("translation._local_models_ready") as ready, patch(
+            "translation._model_package_pairs"
+        ) as pairs, patch("translation._load_package_index") as index:
+            self.assertEqual(service.translate("hello", "en", "zh"), "在线译文")
+            ready.assert_not_called()
+            pairs.assert_not_called()
+            index.assert_not_called()
+
+    def test_local_models_ready_false_when_nothing_installed(self):
+        """离线且无安装模型：返回 False，且不访问清单。"""
+        with tempfile.TemporaryDirectory() as temporary, patch.object(
+            translation, "_translation_model_root", return_value=Path(temporary)
+        ), patch("translation._load_package_index") as index, patch(
+            "translation._model_package_pairs"
+        ) as pairs:
+            self.assertFalse(translation._local_models_ready("en", "zh"))
+            self.assertFalse(translation._local_models_ready("ja", "zh"))
+            index.assert_not_called()
+            pairs.assert_not_called()
+
     def test_local_models_ready_never_loads_package_index(self):
         """readiness 只查安装目录，不得触发网络/清单发现。"""
         with patch("translation._model_package_pairs") as pairs, patch(

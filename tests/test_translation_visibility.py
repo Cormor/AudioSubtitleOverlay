@@ -96,3 +96,92 @@ class TranslationVisibilityTests(unittest.TestCase):
         m.apply_source(3,'source','en',1)
         self.assertEqual(m.snapshot().entries, (('source','提前译文'),))
         self.assertEqual(m.snapshot().translation_activity,1)
+
+
+class _FakeWindow:
+    """最小 Tk after 替身，验证运行时会注册定时器。"""
+
+    def __init__(self):
+        self.jobs = {}
+        self._next = 1
+
+    def after(self, ms, callback):
+        job_id = self._next
+        self._next += 1
+        self.jobs[job_id] = (ms, callback)
+        return job_id
+
+    def after_cancel(self, job_id):
+        self.jobs.pop(job_id, None)
+
+
+class OverlayIdleTimerTests(unittest.TestCase):
+    """覆盖作者指出的运行时路径：set_entries / 定时器，而非只调状态函数。"""
+
+    def _overlay_stub(self):
+        from types import SimpleNamespace
+        from overlay import OverlayWindow
+
+        lane = TranslationLaneState()
+        lane.configure(None, "zh", True)
+        redraws = []
+
+        stub = SimpleNamespace(
+            window=_FakeWindow(),
+            _translation_lane_state=lane,
+            _lane_idle_after_id=None,
+            _layout_cache_key="x",
+            _translation_lane_visible=lambda: bool(lane.visible),
+            _request_redraw=lambda: redraws.append(1),
+        )
+        # 绑定 OverlayWindow 的运行时方法（真正执行调度/定时回调）。
+        for name in (
+            "_cancel_lane_idle_check",
+            "_schedule_lane_idle_check",
+            "_on_lane_idle_timer",
+            "_run_lane_idle_check",
+        ):
+            setattr(stub, name, getattr(OverlayWindow, name).__get__(stub))
+        return OverlayWindow, stub, redraws
+
+    def test_source_update_registers_tk_after(self):
+        """最后一次 source 后应注册 Tk 定时检查。"""
+        OverlayWindow, stub, _ = self._overlay_stub()
+        stub._translation_lane_state.source_updated(0.0)
+        OverlayWindow._schedule_lane_idle_check(stub)
+        self.assertTrue(stub.window.jobs)
+        ms, _callback = next(iter(stub.window.jobs.values()))
+        self.assertGreater(ms, 200)
+
+    def test_timer_callback_collapses_when_no_translation(self):
+        """定时器到期且始终无译文时收起译文栏。"""
+        OverlayWindow, stub, redraws = self._overlay_stub()
+        lane = stub._translation_lane_state
+        for t in (0.0, 1.0, 2.0):
+            lane.source_updated(t)
+        OverlayWindow._schedule_lane_idle_check(stub)
+        _job_id, (ms, callback) = next(iter(stub.window.jobs.items()))
+        # 模拟 after 到期
+        lane.last_source_at = 2.0
+        lane.missing_since = 0.0
+        lane.got_translation = False
+        # 把 now 推到超时之后
+        import time as _time
+        # 直接调用定时器回调（运行时路径）
+        # maybe_collapse 使用 time.perf_counter()，先 mock
+        real = _time.perf_counter
+        _time.perf_counter = lambda: 10.0
+        try:
+            callback()
+        finally:
+            _time.perf_counter = real
+        self.assertFalse(lane.visible)
+        self.assertTrue(redraws)
+
+    def test_new_source_reschedules_timer(self):
+        OverlayWindow, stub, _ = self._overlay_stub()
+        OverlayWindow._schedule_lane_idle_check(stub)
+        first = next(iter(stub.window.jobs.keys()))
+        OverlayWindow._schedule_lane_idle_check(stub)
+        self.assertNotIn(first, stub.window.jobs)
+        self.assertTrue(stub.window.jobs)
