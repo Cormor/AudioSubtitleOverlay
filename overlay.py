@@ -322,6 +322,7 @@ class OverlayWindow:
         self._entries_view = []
         self._follow_tail = True
         self._cancel_auto_scroll()
+        self._cancel_lane_idle_check()
         self._ledger.clear()
         for cursor in self._reading_cursors.values():
             cursor.reset()
@@ -342,9 +343,12 @@ class OverlayWindow:
         self._request_redraw()
 
     def _cancel_auto_scroll(self) -> None:
+        # 只取消阅读推进；空闲收起定时器另管，避免滚动误停检查。
         if self._auto_scroll_after is not None:
             self.window.after_cancel(self._auto_scroll_after)
             self._auto_scroll_after = None
+
+    def _cancel_lane_idle_check(self) -> None:
         if getattr(self, "_lane_idle_after_id", None) is not None:
             try:
                 self.window.after_cancel(self._lane_idle_after_id)
@@ -479,12 +483,7 @@ class OverlayWindow:
 
     def _schedule_lane_idle_check(self) -> None:
         """最后一次原文/译文后按 timeout 定时检查，避免只靠快照回调。"""
-        if getattr(self, "_lane_idle_after_id", None) is not None:
-            try:
-                self.window.after_cancel(self._lane_idle_after_id)
-            except tk.TclError:
-                pass
-            self._lane_idle_after_id = None
+        self._cancel_lane_idle_check()
         timeout = float(getattr(self._translation_lane_state, "timeout", 5.0) or 5.0)
         try:
             self._lane_idle_after_id = self.window.after(
