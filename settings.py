@@ -9,6 +9,14 @@ from pathlib import Path
 
 
 RECOGNITION_BEAM_SIZES = (1, 3, 5)
+RECOGNITION_NUMERIC_OPTIONS = {
+    "window_seconds": (8, 12, 16),
+    "update_interval": (0.1, 0.25, 0.5, 0.75, 1.0),
+    "repetition_penalty": (1.0, 1.05, 1.1, 1.2),
+    "no_repeat_ngram_size": (0, 3, 5, 8),
+    "no_speech_threshold": (0.3, 0.6, 0.8),
+    "vad_silence_ms": (200, 400, 600, 800),
+}
 RECOGNITION_TEMPERATURE_SCHEDULES = ("0", "0,0.2,0.4")
 
 
@@ -27,6 +35,8 @@ def application_data_dir() -> Path:
 class Settings:
     """应用运行所需的持久化配置。"""
 
+    auto_start: bool = False
+    start_minimized: bool = False
     source_language: str = "自动检测"
     target_language: str = "中文"
     recognition_model: str = "tiny"
@@ -34,6 +44,12 @@ class Settings:
     recognition_beam_size: int = 1
     recognition_condition_on_previous_text: bool = False
     recognition_temperature_schedule: str = "0"
+    recognition_window_seconds: int = 8
+    recognition_update_interval: float = 0.1
+    recognition_repetition_penalty: float = 1.0
+    recognition_no_repeat_ngram_size: int = 0
+    recognition_no_speech_threshold: float = 0.6
+    recognition_vad_silence_ms: int = 400
     model_path: str = ""
     loopback_device: str = ""
     translation_enabled: bool = True
@@ -65,6 +81,8 @@ class Settings:
             return cls()
         allowed = {field.name for field in fields(cls)}
         values = {key: value for key, value in payload.items() if key in allowed}
+        # 旧版启动后立即识别；迁移已有配置时保留这一选择。新安装仍由用户点击开始。
+        values.setdefault("auto_start", True)
         if values.get("translation_backend") == "仅使用本地 Argos":
             values["translation_backend"] = "仅使用本地翻译"
         # 兼容旧版本只保存一个整体透明度的配置文件。
@@ -92,13 +110,23 @@ class Settings:
                 }
             else:
                 values["recognition_condition_on_previous_text"] = bool(condition)
-        for key in ("overlay_auto_height", "overlay_animation", "overlay_topmost", "translation_enabled"):
+        for key in ("overlay_auto_height", "overlay_animation", "overlay_topmost", "translation_enabled", "auto_start", "start_minimized"):
             if key in values and not isinstance(values[key], bool):
                 values[key] = str(values[key]).lower() in {"1", "true", "yes", "on", "启用"}
         if "recognition_temperature_schedule" in values and values[
             "recognition_temperature_schedule"
         ] not in RECOGNITION_TEMPERATURE_SCHEDULES:
             values.pop("recognition_temperature_schedule")
+        for name, choices in RECOGNITION_NUMERIC_OPTIONS.items():
+            key = "recognition_" + name
+            if key in values:
+                try:
+                    value = type(choices[0])(values[key])
+                    if value not in choices:
+                        raise ValueError(key)
+                    values[key] = value
+                except (TypeError, ValueError, OverflowError):
+                    values.pop(key)
         try:
             return cls(**values)
         except (TypeError, ValueError):

@@ -47,6 +47,7 @@ class RollingTranscript:
         self._split_armed = None
         self._armed_terminal = ''
         self._preferred_break = 0
+        self.safe_decode_start = 0.0
 
     @property
     def safe_trim_time(self):
@@ -302,6 +303,8 @@ class RollingTranscript:
                 self._close_block(updates)
             previous_end = stable[index - 1].end if index else self._last_stable_end
             pause_gap = unit.start - previous_end
+            if pause_gap >= self.pause_split_seconds:
+                self.safe_decode_start = max(self.safe_decode_start, (previous_end + unit.start) / 2)
             pause_break = (
                 pause_gap >= self.pause_split_seconds
                 and self.active_text.strip(" \t")
@@ -390,6 +393,7 @@ class RollingTranscript:
             self.active_text and not self.pending
             and audio_end - self._last_stable_end >= self.pause_sentence_seconds
         ):
+            self.safe_decode_start = max(self.safe_decode_start, (self._last_stable_end + audio_end) / 2)
             self.active_text = self._add_pause_punctuation(
                 self.active_text,
                 self.pause_sentence_seconds,

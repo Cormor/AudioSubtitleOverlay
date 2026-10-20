@@ -129,7 +129,7 @@ jobs:
             "release-assets/SHA256SUMS.txt"
           )
           # 不覆盖已有 Release 或资产；新版本先上传到草稿再公开。
-          gh release create $tag @assets --draft --repo $repo --title "AudioSubtitleOverlay $tag" --notes-file "release-assets\RELEASE_NOTES.md" --target $env:GITHUB_SHA
+          gh release create $tag @assets --draft --repo $repo --title "声幕 $tag" --notes-file "release-assets\RELEASE_NOTES.md" --target $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw "创建 Release 草稿或上传资产失败。" }
           $raw = gh release view $tag --repo $repo --json assets,tagName,targetCommitish,isDraft
           if ($LASTEXITCODE -ne 0) { throw "无法读回 Release 草稿。" }

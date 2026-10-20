@@ -36,6 +36,12 @@ class PipelineOptions:
     condition_on_previous_text: bool = False
     temperature_schedule: str = "0"
     translation_enabled: bool = True
+    window_seconds: int = 8
+    update_interval: float = 0.1
+    repetition_penalty: float = 1.0
+    no_repeat_ngram_size: int = 0
+    no_speech_threshold: float = 0.6
+    vad_silence_ms: int = 400
 
 
 def translation_required(options: PipelineOptions, detected_language: str | None) -> bool:
@@ -51,6 +57,18 @@ def translation_only_change(previous: PipelineOptions, current: PipelineOptions)
 
 
 _GPU_DEVICE_MODES = frozenset(("自动（优先GPU）", "NVIDIA GPU（float16）"))
+
+
+def recognition_window_start(received_samples, buffer_start, silence_boundary, *,
+                             sample_rate=16_000, maximum_samples=128_000):
+    """Only advance at a confirmed silence boundary, never inside continuous speech.
+
+    If no safe pause has been observed, preserve the original 8-second window.
+    The boundary comes from the merger's committed word timing, not from the
+    most recent confirmed character (which may be in the middle of a sentence).
+    """
+    maximum_start = max(0, received_samples - maximum_samples)
+    return max(buffer_start, maximum_start, int(silence_boundary * sample_rate))
 
 
 def _model_source_key(options: PipelineOptions) -> tuple[str, str]:
@@ -289,10 +307,11 @@ class LivePipeline:
 
                     active_options = options
                     active_generation = generation
-                    quality_update_samples = (
-                        self.gpu_quality_update_samples
-                        if recognizer.actual_device == "cuda"
-                        else self.cpu_quality_update_samples
+                    requested_samples = int(options.update_interval * SystemAudioCapture.sample_rate)
+                    quality_update_samples = max(
+                        requested_samples,
+                        self.gpu_quality_update_samples if recognizer.actual_device == "cuda"
+                        else self.cpu_quality_update_samples,
                     )
                     last_audio_status_at = time.monotonic()
                     logging.info("识别配置已生效：源语言=%s，目标语言=%s，翻译开关=%s，搜索范围=%s，前文参考=%s，温度=%s",
@@ -368,8 +387,12 @@ class LivePipeline:
                 target_language = options.target_language
                 if received_samples - quality_decoded_until < quality_update_samples:
                     continue
-                desired_start = max(0, received_samples - self.window_samples)
-                # 音频按采集顺序处理；窗口长度不再依赖文字确认进度。
+                desired_start = recognition_window_start(
+                    received_samples, buffer_start, transcript.safe_decode_start,
+                    sample_rate=SystemAudioCapture.sample_rate,
+                    maximum_samples=int(options.window_seconds * SystemAudioCapture.sample_rate),
+                )
+                # 按采集顺序推进；仅在确认的停顿中裁去已结束语音，连续句子不提前裁窗。
                 trim_to = max(buffer_start, desired_start)
                 if trim_to > buffer_start:
                     buffer = buffer[trim_to - buffer_start:]
@@ -383,6 +406,10 @@ class LivePipeline:
                         beam_size=options.beam_size,
                         condition_on_previous_text=options.condition_on_previous_text,
                         temperature_schedule=options.temperature_schedule,
+                        repetition_penalty=options.repetition_penalty,
+                        no_repeat_ngram_size=options.no_repeat_ngram_size,
+                        no_speech_threshold=options.no_speech_threshold,
+                        vad_silence_ms=options.vad_silence_ms,
                     )
                 except Exception:
                     logging.exception("滚动窗口识别失败，设备=%s", recognizer.actual_device)

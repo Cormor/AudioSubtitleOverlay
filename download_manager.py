@@ -271,30 +271,39 @@ class DownloadManager:
         """请求暂停任务，当前数据块完成后保留断点。"""
         with self._lock:
             job = self._jobs.get(key)
-        if job is None or job.done.is_set():
+        if job is None:
             return False
-        job.request_pause()
-        self._emit(job, state="暂停中", detail="等待当前数据块结束。")
+        with job.condition:
+            if job.done.is_set() or job.state in {"完成", "失败", "已取消"}:
+                return False
+            job.request_pause()
+            self._emit(job, state="暂停中", detail="等待当前数据块结束。")
         return True
 
     def resume(self, key: str) -> bool:
         """继续暂停中的任务。"""
         with self._lock:
             job = self._jobs.get(key)
-        if job is None or job.done.is_set():
+        if job is None:
             return False
-        job.request_resume()
-        self._emit(job, state="继续下载", detail="正在从已保存断点继续。")
+        with job.condition:
+            if job.done.is_set() or job.state in {"完成", "失败", "已取消"}:
+                return False
+            job.request_resume()
+            self._emit(job, state="继续下载", detail="正在从已保存断点继续。")
         return True
 
     def cancel(self, key: str) -> bool:
         """取消任务并保留已经下载的.part文件。"""
         with self._lock:
             job = self._jobs.get(key)
-        if job is None or job.done.is_set():
+        if job is None:
             return False
-        job.request_cancel()
-        self._emit(job, state="正在取消", detail="正在保存已下载断点。")
+        with job.condition:
+            if job.done.is_set() or job.state in {"完成", "失败", "已取消"}:
+                return False
+            job.request_cancel()
+            self._emit(job, state="正在取消", detail="正在保存已下载断点。")
         return True
 
     def is_active(self, key: str) -> bool:
@@ -381,8 +390,8 @@ class DownloadManager:
                     job.on_finished(job.key, state, detail)
                 except Exception:
                     LOGGER.exception("组件完成回调失败：%s", job.key)
-            with self._lock:
-                self._jobs[job.key] = job
+            # start_factory already owns the registry entry. Never overwrite a
+            # replacement started by on_finished after this job signalled done.
 
     def _download_file(self, job: _DownloadJob, spec: ComponentSpec, item: ComponentFile) -> None:
         if item.archive:
@@ -575,46 +584,53 @@ class DownloadManager:
         speed: float | None = None,
         detail: str = "",
     ) -> None:
-        if job.spec is None:
-            total = None
-            completed = 0
-        else:
-            total = sum(job.file_sizes.values()) or None
-            completed = self._component_completed(job.spec, job.file_sizes)
-        now = time.monotonic()
-        if speed is None:
-            if job.last_speed_time is None:
-                job.last_speed_time = now
-                job.last_speed_bytes = completed
+        with job.condition:
+            # A late pause/cancel/progress publication must not replace a terminal state.
+            if job.state in {"完成", "失败", "已取消"}:
+                return
+            with self._lock:
+                if self._jobs.get(job.key) is not job:
+                    return
+            if job.spec is None:
+                total = None
+                completed = 0
             else:
-                elapsed = now - job.last_speed_time
-                delta = completed - job.last_speed_bytes
-                if elapsed >= 0.2 and delta >= 0:
-                    job.last_speed = delta / elapsed
+                total = sum(job.file_sizes.values()) or None
+                completed = self._component_completed(job.spec, job.file_sizes)
+            now = time.monotonic()
+            if speed is None:
+                if job.last_speed_time is None:
                     job.last_speed_time = now
                     job.last_speed_bytes = completed
-            speed = job.last_speed
-        if state is None:
-            state = job.state
-        job.state = state
-        progress = DownloadProgress(
-            component_key=job.key,
-            state=state,
-            completed=completed,
-            total=total,
-            file_name=file_name,
-            speed=speed,
-            resumable=resumable,
-            detail=detail,
-        )
-        job.progress = progress
-        with self._lock:
-            self._statuses[job.key] = progress
-        if job.on_progress:
-            try:
-                job.on_progress(progress)
-            except Exception:
-                LOGGER.exception("组件进度回调失败：%s", job.key)
+                else:
+                    elapsed = now - job.last_speed_time
+                    delta = completed - job.last_speed_bytes
+                    if elapsed >= 0.2 and delta >= 0:
+                        job.last_speed = delta / elapsed
+                        job.last_speed_time = now
+                        job.last_speed_bytes = completed
+                speed = job.last_speed
+            if state is None:
+                state = job.state
+            job.state = state
+            progress = DownloadProgress(
+                component_key=job.key,
+                state=state,
+                completed=completed,
+                total=total,
+                file_name=file_name,
+                speed=speed,
+                resumable=resumable,
+                detail=detail,
+            )
+            job.progress = progress
+            with self._lock:
+                self._statuses[job.key] = progress
+            if job.on_progress:
+                try:
+                    job.on_progress(progress)
+                except Exception:
+                    LOGGER.exception("组件进度回调失败：%s", job.key)
 
     def _component_completed(self, spec: ComponentSpec, file_sizes: dict[str, int]) -> int:
         root = self._archive_stage_root(spec) if spec.has_archives else spec.target_dir

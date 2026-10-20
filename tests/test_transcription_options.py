@@ -32,6 +32,10 @@ class TranscriptionOptionTests(unittest.TestCase):
             beam_size=5,
             condition_on_previous_text=True,
             temperature_schedule="0,0.2,0.4",
+            repetition_penalty=1.1,
+            no_repeat_ngram_size=5,
+            no_speech_threshold=0.8,
+            vad_silence_ms=600,
         )
 
         self.assertEqual(result.text, "测试")
@@ -40,6 +44,10 @@ class TranscriptionOptionTests(unittest.TestCase):
         self.assertEqual(model.options["temperature"], (0.0, 0.2, 0.4))
         self.assertTrue(model.options["condition_on_previous_text"])
         self.assertNotIn("hotwords", model.options)
+        self.assertEqual(model.options["repetition_penalty"],1.1)
+        self.assertEqual(model.options["no_repeat_ngram_size"],5)
+        self.assertEqual(model.options["no_speech_threshold"],0.8)
+        self.assertEqual(model.options["vad_parameters"]["min_silence_duration_ms"],600)
 
 
 if __name__ == "__main__":
