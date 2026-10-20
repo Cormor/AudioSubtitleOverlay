@@ -392,6 +392,7 @@ class OverlayWindow:
         """销毁悬浮窗。"""
         if self.window.winfo_exists():
             self._cancel_auto_scroll()
+            self._cancel_lane_idle_check()
             if self._animation_after is not None:
                 self.window.after_cancel(self._animation_after)
                 self._animation_after = None
@@ -644,7 +645,11 @@ class OverlayWindow:
             (-left, -top), text, font=font, fill=color, anchor="la",
             stroke_width=scale, stroke_fill=outline,
         )
-        return tile, left, top
+        # 只对变化的字行做超采样缩小；缓存最终字块，避免每帧缩放整张浮窗。
+        if scale > 1:
+            tile = tile.resize((max(1, round(tile.width / scale)),
+                                max(1, round(tile.height / scale))), Image.Resampling.LANCZOS)
+        return tile, left / scale, top / scale
 
     def _draw_line(self, target, line, line_y, specs, alpha: float) -> None:
         """按当前排版坐标合成字形；缓存不参与文本选择或滚动判断。"""
@@ -653,7 +658,8 @@ class OverlayWindow:
             line["text"], spec["font"], spec["color"], spec["outline"], self.render_scale,
         )
         base_x = line.get("x", 0) or 0
-        position = (round(12 * self.render_scale + base_x + left), round(line_y) + top)
+        position = (round(12 + base_x / self.render_scale + left),
+                    round(line_y / self.render_scale + top))
         if alpha >= 0.999:
             target.alpha_composite(tile, position)
             return
@@ -661,41 +667,10 @@ class OverlayWindow:
         faded.putalpha(faded.getchannel("A").point(lambda value: round(value * alpha)))
         target.alpha_composite(faded, position)
 
-    def _draw_column_tags(self, draw, layout, label_font, scale, viewport_top, latest_source, latest_translation, canvas_width=0, history=False) -> None:
-        """标题字：只写字和细线，不再贴色块，避免和玻璃板拼贴感。"""
-        labels = layout.get("reading_labels") or {}
-        source_y = labels.get("source", viewport_top)
-        if history:
-            draw.text(
-                (14 * scale, source_y),
-                "字幕 · 原文在上 / 译文在下",
-                font=label_font,
-                fill=(210, 220, 232, 200),
-            )
-            draw.line(
-                (10 * scale, source_y + 18 * scale, (canvas_width or 10**6) - 10 * scale, source_y + 18 * scale),
-                fill=(255, 255, 255, 28),
-                width=max(1, scale // 2),
-            )
-            return
-        translation_y = labels.get("translation", source_y)
-        if self._same_language:
-            translation_label = "译文 · 同语言"
-        elif latest_translation >= 0 and latest_translation < latest_source:
-            translation_label = "译文 · 等待当前句"
-        elif self._entries_view and self._entries_view[-1].translation_pending:
-            translation_label = "译文 · 更新中"
-        else:
-            translation_label = "译文"
-        draw.text(
-            (14 * scale, source_y), "原文",
-            font=label_font, fill=(210, 220, 232, 200),
-        )
-        if self._translation_lane_visible():
-            draw.text(
-                (14 * scale, translation_y), translation_label,
-                font=label_font, fill=(210, 220, 232, 200),
-            )
+    def _draw_header(self, draw, font, width):
+        label = "声幕 · 原文 / 译文" if self._translation_lane_visible() else "声幕 · 原文"
+        draw.text((14, 10), label, font=font, fill=(210, 220, 232, 220))
+        draw.line((10, 28, width - 10, 28), fill=(255, 255, 255, 28), width=1)
 
     def _draw_content(self, font_size: int, now: float) -> int:
         """使用超采样 RGBA 图像绘制，固定最新字幕组并保留历史滚动位置。"""
@@ -716,7 +691,7 @@ class OverlayWindow:
         )
         self._clamp_scroll_offset(height - 50)
         source_indices = set()
-        foreground = Image.new("RGBA", (width * scale, height * scale))
+        foreground = Image.new("RGBA", (width, height))
         draw = ImageDraw.Draw(foreground)
         # 实时与回看统一为「原文在上 / 译文在下」成对列表。
         # 垂直成对流用完整 tail（含译文），避免只按原文 tail 裁掉最新译文。
@@ -730,7 +705,8 @@ class OverlayWindow:
             self._scroll_motion.snap(full_tail)
             self._scroll_target = full_tail
         tag_bottom = viewport_top + 18 * scale
-        last_entry = object()
+        no_entry = object()
+        last_entry = no_entry
         for line in lines:
             line_y = line["y"] - self._scroll_motion.value * scale
             if line_y < tag_bottom or line_y + line["height"] > layout["viewport_bottom"]:
@@ -743,13 +719,13 @@ class OverlayWindow:
                 line["style"] == "source"
                 and entry is not None
                 and entry != last_entry
-                and last_entry is not object()
+                and last_entry is not no_entry
                 and line_y - 8 * scale >= tag_bottom
             ):
                 draw.line(
-                    (12 * scale, line_y - 6 * scale, width * scale - 28 * scale, line_y - 6 * scale),
+                    (12, round(line_y / scale - 6), width - 28, round(line_y / scale - 6)),
                     fill=(255, 255, 255, 32),
-                    width=max(1, scale // 2),
+                    width=1,
                 )
             if entry is not None:
                 last_entry = entry
@@ -761,15 +737,11 @@ class OverlayWindow:
                 and line["char_end"] >= len(self._entries_view[line["entry"]].source)
             ):
                 source_indices.add(line["entry"])
-        if ("label", scale) not in self._fonts:
-            self._fonts[("label", scale)] = ImageFont.truetype(
-                os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "msyh.ttc"), 11 * scale,
+        if ("label", 1) not in self._fonts:
+            self._fonts[("label", 1)] = ImageFont.truetype(
+                os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "msyh.ttc"), 11,
             )
-        self._draw_column_tags(
-            draw, layout, self._fonts[("label", scale)], scale, viewport_top,
-            -1, -1, canvas_width=width * scale, history=True,
-        )
-        foreground = foreground.resize((width, height), Image.Resampling.LANCZOS)
+        self._draw_header(draw, self._fonts[("label", 1)], width)
         if self.settings.overlay_text_opacity != 1.0:
             foreground.putalpha(foreground.getchannel("A").point(lambda value: round(value * self.settings.overlay_text_opacity)))
         # 一张圆角玻璃：底板 + 正文 + 控件，最后统一裁进同一圆角。
@@ -808,6 +780,10 @@ class OverlayWindow:
                  bar["thumb_top"] + bar["thumb_height"]),
                 radius=3, fill=(170, 184, 204, thumb_alpha),
             )
+        # 透明背景时仍保留可命中的小型缩放手柄，而不是不可点击的透明角。
+        for offset in (0, 5, 10):
+            overlay_ui.line((width - 20 + offset, height - 7, width - 7, height - 20 + offset),
+                            fill=(140, 204, 222, 180), width=2)
         # 同一圆角蒙版，角上不会露出第二层边角。
         mask = Image.new("L", (width, height), 0)
         ImageDraw.Draw(mask).rounded_rectangle(

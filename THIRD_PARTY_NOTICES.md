@@ -14,7 +14,7 @@
   `d90ca5fe260221311c53c58e660288d3deb8d356`。模型仓库的许可证和模型卡
   以该来源仓库为准。
 - `numpy`、`soundcard`、`requests`、`pyinstaller`、`Pillow`、`opencc` 和
-  `sentencepiece`：版本范围位于 requirements 文件；每个包的许可证以对应
+  `sentencepiece`、`pystray` 和 `six`：版本范围位于 requirements 文件；每个包的许可证以对应
   发布版本中携带的 LICENSE、NOTICE 或元数据为准。
 - 本地翻译模型：按语言对从
   <https://github.com/argosopentech/argospm-index> 按需下载；模型包中的

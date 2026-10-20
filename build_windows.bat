@@ -2,18 +2,7 @@
 setlocal
 cd /d "%~dp0."
 
-rem 构建前只强制停止本应用，避免运行中的 EXE 锁定构建目录。
-taskkill /F /T /IM AudioSubtitleOverlay.exe >nul 2>&1
-rem 若旧应用以管理员权限运行，则使用同等权限停止；仍未停止时不得覆盖输出。
-tasklist /FI "IMAGENAME eq AudioSubtitleOverlay.exe" /NH | findstr /I "AudioSubtitleOverlay.exe" >nul
-if not errorlevel 1 (
-    powershell -NoProfile -Command "Start-Process -FilePath $env:WINDIR\System32\taskkill.exe -ArgumentList '/F /T /IM AudioSubtitleOverlay.exe' -Verb RunAs -Wait"
-)
-tasklist /FI "IMAGENAME eq AudioSubtitleOverlay.exe" /NH | findstr /I "AudioSubtitleOverlay.exe" >nul
-if not errorlevel 1 (
-    echo 本应用仍在运行，未覆盖构建目录。
-    exit /b 1
-)
+rem 不结束正在运行的安装版；安装更新使用并列版本目录。
 
 rem 优先使用 Python 3.11；没有时使用 py 启动器当前的 Python 3 版本
 py -3.11 --version >nul 2>&1

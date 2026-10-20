@@ -204,6 +204,10 @@ class WhisperRecognizer:
         beam_size: int = 1,
         condition_on_previous_text: bool = False,
         temperature_schedule: str | tuple[float, ...] | list[float] = "0",
+        repetition_penalty: float = 1.0,
+        no_repeat_ngram_size: int = 0,
+        no_speech_threshold: float = 0.6,
+        vad_silence_ms: int = 400,
     ) -> RecognitionResult:
         """识别一段 16 kHz 单声道浮点音频。"""
         if self._model is None:
@@ -233,8 +237,13 @@ class WhisperRecognizer:
                 "condition_on_previous_text": condition_on_previous_text,
                 "vad_filter": True,
                 "word_timestamps": True,
-                "vad_parameters": {"min_silence_duration_ms": 400},
+                "vad_parameters": {"min_silence_duration_ms": vad_silence_ms},
             }
+        transcribe_options.update(
+            repetition_penalty=repetition_penalty,
+            no_repeat_ngram_size=no_repeat_ngram_size,
+            no_speech_threshold=no_speech_threshold,
+        )
         segments, info = self._model.transcribe(
             audio,
             language=language,

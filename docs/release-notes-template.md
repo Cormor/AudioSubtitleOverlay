@@ -1,18 +1,14 @@
-# AudioSubtitleOverlay {{VERSION}}
+# 声幕 {{VERSION}}
 
-## 更新 | Update
+## 更新
 
-- 改善双语字幕阅读：固定文字基线和原文、译文分区，修复换行续排及重叠识别窗口造成的重复追加。
-- 原文与译文均支持一行最小高度，扩大缩放手柄；滚动条支持拖动、轨道点击和回到最新字幕。
-- 手动指定源语言时按源语言与目标语言是否相同启用译文区；自动检测时，原文持续更新且连续 5 秒没有译文输出才收起，译文恢复后重新展开。
-- 浮窗保留最近 64 段确认字幕，复用历史换行缓存；修复过时译文挂接到新原文及窗口关闭后程序未退出的问题。
-- 优先复用已安装的本地翻译模型，支持语言模型清单缓存，并减少连续翻译失败时的重复报错。
-
-- Improves bilingual reading with fixed text baselines and separate language areas; fixes wrapping and repeated text from overlapping recognition windows.
-- Supports one-row minimum heights, a larger resize grip, and a draggable scrollbar for history review.
-- Uses the selected language pair to enable translation in manual mode. Automatic mode waits for five seconds of source updates without translation output before collapsing the area, and restores it when translation resumes.
-- Keeps the latest 64 confirmed blocks and reuses wrapping caches; fixes stale translation assignment and application shutdown.
-- Reuses installed local translation models, caches the model index, and reduces repeated error reporting.
+- 应用更名为“声幕”，增加声波与字幕图标；保留原有配置和模型目录。
+- 常用操作固定在顶部，识别、字幕外观和高级设置分别展示；增加高对比外观预设、从快到准的五档模型组合，以及可单独调整的识别参数。
+- 关闭或最小化设置窗口后收进右下角托盘；托盘可恢复设置、显示／隐藏字幕、开始／停止识别及退出。
+- 原文与译文成对显示，修复首行被裁掉的问题；有过译文后原文停更，译文区保持显示。
+- 翻译后端严格按选择分流，在线模式不先探测本地模型清单。
+- 减少字幕合成中的重复缩放，并保留未确认语音及重叠上下文，减少重复识别已经确认的内容。
+- 本地打包入口会同步更新安装版，保留旧版本和用户数据；发布完成后可安装 GitHub 上同一份校验通过的正式包。
 
 ## 下载与运行 | Download and run
 

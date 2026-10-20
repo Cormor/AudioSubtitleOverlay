@@ -1,23 +1,13 @@
 @echo off
 setlocal
 cd /d "%~dp0."
-
-if not exist "dist_minimal\AudioSubtitleOverlay\AudioSubtitleOverlay.exe" (
-    echo 未找到构建结果，请先运行 build_windows.bat。
+if not exist ".venv\Scripts\python.exe" (
+    echo Please run build_windows.bat first.
     exit /b 1
 )
-
-python package_minimal.py
-if errorlevel 1 (
-    echo 创建压缩包失败。
-    exit /b 1
+if defined GITHUB_ACTIONS (
+    ".venv\Scripts\python.exe" tools\package_and_install.py --package-only
+) else (
+    ".venv\Scripts\python.exe" tools\package_and_install.py
 )
-
-python package_tiny_model.py
-if errorlevel 1 (
-    echo 创建tiny模型压缩包失败。
-    exit /b 1
-)
-
-echo 压缩包创建完成。
-endlocal
+exit /b %errorlevel%

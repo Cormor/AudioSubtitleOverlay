@@ -1,62 +1,49 @@
-# Windows 系统音频识别与双语字幕悬浮窗 | Audio Subtitle Overlay
+# 声幕 · 实时字幕与翻译
 
-<p align="center">
-  <img src="docs/screenshots/main-window.png" alt="AudioSubtitleOverlay 主窗口 / main window" width="720">
-</p>
+<p align="center"><img src="assets/brand/icon.png" alt="声幕图标：声波与字幕" width="96"></p>
 
-## 中文
+声幕是一款 Windows 桌面字幕应用：把电脑播放或麦克风输入的声音识别为文字，在悬浮窗中显示原文和译文。原项目名称为 AudioSubtitleOverlay，配置、模型与已有文件位置保持兼容。
 
-AudioSubtitleOverlay 是 Windows 桌面悬浮字幕应用，可识别系统播放声音或麦克风输入，并同时显示源文本和译文。
+<p align="center"><img src="docs/screenshots/main-window.png" alt="声幕设置窗口" width="760"></p>
 
-- 支持系统播放回环和麦克风输入。
-- 提供 Beta 音频来源，可尝试自动跟踪正在发声的应用并直接采集该应用声音；需要 Windows 10 build 20348 或更高版本，部分应用可能不支持。
-- 支持运行中切换音频来源、源语言、目标语言、识别模型、计算设备和识别质量参数。
-- 可调整搜索范围、前文参考和解码回退。
-- 原文与译文各支持一行最小高度，浮窗滚动条可拖动回看最近 64 段确认字幕。
-- 手动指定源语言时按语言是否相同启用译文区；自动检测时，原文持续更新且 5 秒没有译文输出才收起。
-- 本地翻译首次使用时按语言对下载模型，完成后可离线使用；也可选择免费在线翻译。
-- 支持 CPU 运行；选择 GPU 时优先使用本机已有的兼容运行库，缺少时才按需准备。
-- 主程序包约 110 MiB，低于 150 MiB；不要求目标电脑预装 Python。
-- 提供独立的 tiny 模型包，便于离线携带默认模型。
+## 使用起来
 
-### 下载与运行
+1. 从 [GitHub Releases](https://github.com/Cormor/AudioSubtitleOverlay/releases) 下载主程序 ZIP，解压并保留完整的 `AudioSubtitleOverlay` 文件夹。
+2. 双击 `AudioSubtitleOverlay\AudioSubtitleOverlay.exe`，选择音频来源、源语言和目标语言，点击“开始识别”。不需要预装 Python。
+3. 在“字幕外观”中选择预设，或分别调整原文、译文的字号、颜色与透明度。
+4. 关闭或最小化设置窗口后，程序收进右下角托盘，字幕继续运行。点击托盘图标可重新打开设置；右键菜单也可显示／隐藏字幕、开始／停止识别或退出。
 
-1. 从 [GitHub Releases](https://github.com/Cormor/AudioSubtitleOverlay/releases) 下载主程序 ZIP。
-2. 解压后保留完整的 `AudioSubtitleOverlay` 文件夹及其中的 `_internal` 文件夹。
-3. 需要离线携带 tiny 模型时，再下载 tiny 模型 ZIP，并解压到与主程序相同的父目录。
-4. 双击 `AudioSubtitleOverlay\AudioSubtitleOverlay.exe`。
+首次安装默认等待用户开始识别；已有配置升级后保留原来的自动开始行为。启动选项可在“高级”中调整。本次只想打开设置、不开始采集时，可以使用 `AudioSubtitleOverlay.exe --no-autostart`。
 
-主程序没有内置语音模型。联网时，应用会按需准备语音模型和本地翻译模型；使用 tiny 模型包可以在运行前准备默认语音模型。GPU 运行库仅在选择 GPU 且本机缺少对应组件时按需准备，CPU 模式不需要该运行库。
+## 功能
 
-### 发布文件
+- **字幕与翻译**：原文在上、译文在下成对显示；译文未到时显示等待占位。已有译文后，即使原文停更，译文区也保持显示。
+- **回看与导出**：保留最近 64 段确认字幕。滚轮或滚动条回看，右键回到最新字幕，也可导出当前内容为 TXT。
+- **识别设置**：支持运行中切换音频来源、语言、模型和计算设备。提供极速 tiny、流畅 base、均衡 small、精度优先 medium、大型精度 large-v3 五档推荐组合。选择后点击应用才会生效；可取消“同时切换模型”以保留当前模型或自定义目录。高级页可手动调整搜索范围、参考前文、解码回退、最大音频窗口、更新间隔、重复惩罚、禁止重复词元组、无语音阈值和语音分段停顿。各档是调参起点，不保证模型越大就越准；实际速度也受游戏负载影响。
+- **离线与在线翻译**：本地翻译模型首次使用时按语言对准备，完成后可离线使用；在线 MyMemory 后端会把待翻译文字发送到公共接口。纯在线、纯本地和本地优先三种选择分别生效。
+- **系统播放与麦克风**：支持播放回环及麦克风输入。Beta 来源可尝试跟踪正在发声的应用，需要 Windows 10 build 20348 或更高版本，部分应用可能不支持。
+- **CPU 与 GPU**：支持 CPU 运行；选择 GPU 时优先复用兼容运行库，缺少时再按需准备。
+- **设置自动保存**：常用操作固定在顶部；识别、字幕外观和高级设置分开，窗口缩小时可以滚动查看。
 
-- `AudioSubtitleOverlay_Portable_v1.2.1.zip`：主程序，约 110 MiB。
-- `AudioSubtitleOverlay_tiny_model_v1.2.1.zip`：可选 tiny 模型包，约 67 MiB。
-- `SHA256SUMS.txt`：发布文件校验值。
+原文已停止一段时间且本轮一直没有译文时，会收起空译文区；新原文或译文到达后重新显示。原文与目标语言相同时不调用翻译后端。
+
+## 下载文件
+
+- `AudioSubtitleOverlay_Portable_v1.3.0.zip`：主程序。
+- `AudioSubtitleOverlay_tiny_model_v1.3.0.zip`：可选的离线 tiny 语音模型包，解压到主程序相同的父目录。
+- `SHA256SUMS.txt`：发布包校验值。
+
+主程序不内置语音或翻译模型。联网时会按需准备缺少的组件；需要携带默认模型离线运行时，请另外下载 tiny 模型包。主程序文件名和配置目录继续沿用 AudioSubtitleOverlay，避免升级后丢失已有设置和模型。
+
+## 本地维护与发布
+
+每次发布都同时更新本机安装版，使用版本目录保留旧文件，并只保留一个当前的开始菜单入口。构建、打包、安装和同步正式发布包的步骤见 [发布流程](docs/releasing.md)。
 
 ## English
 
-AudioSubtitleOverlay is a Windows desktop subtitle overlay. It recognizes system playback or microphone audio locally and displays source text with translation.
+**声幕** is a Windows live-caption and translation overlay, formerly named AudioSubtitleOverlay. It supports system playback and microphone input, paired source/translated captions, recent-history export, and CPU or NVIDIA GPU recognition. Closing or minimizing Settings keeps the app in the notification area. Its menu can restore Settings, show/hide captions, start/stop recognition, or exit.
 
-- Supports system playback loopback and microphone input.
-- Offers a beta audio source that attempts to follow an app currently producing sound and capture its audio directly. Requires Windows 10 build 20348 or later; some apps may not be supported.
-- Lets users change the audio source, languages, recognition model, compute device, and recognition quality settings while recognition is running.
-- Provides adjustable search range, context use, and decode fallback.
-- Supports one-row minimum heights for source and translation, with a draggable scrollbar for the latest 64 confirmed subtitle blocks.
-- Keeps the translation area enabled for different manually selected languages; in automatic mode, it collapses only after five seconds of source updates without translation output.
-- Downloads a local translation model for the selected language pair on first use; it can then work offline, or use free online translation instead.
-- Supports CPU mode; GPU mode reuses a compatible runtime already available on the computer and prepares it only when missing.
-- The main portable package is about 110 MiB and does not require Python to be installed on the target computer.
-- An optional tiny-model package is provided for offline distribution.
-
-### Download and run
-
-1. Download the main ZIP from [GitHub Releases](https://github.com/Cormor/AudioSubtitleOverlay/releases).
-2. Extract it and keep the complete `AudioSubtitleOverlay` directory, including `_internal`.
-3. For offline use of the tiny model, extract the tiny-model ZIP under the same parent directory.
-4. Double-click `AudioSubtitleOverlay\AudioSubtitleOverlay.exe`.
-
-The main package does not include speech or translation models. When network access is available, the application prepares missing models as needed; the tiny-model package can be prepared in advance. GPU runtime components are prepared only when GPU mode is selected and they are missing.
+Extract the portable ZIP and run `AudioSubtitleOverlay/AudioSubtitleOverlay.exe`. Keep the complete directory, including `_internal`. The executable and configuration paths retain the previous identity for upgrade compatibility. Speech and translation models are prepared separately as needed; an optional tiny-model ZIP is available for offline use. `--no-autostart` opens the app without starting capture for that launch.
 
 ## 许可证与商业使用 | License and commercial use
 

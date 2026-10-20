@@ -9,12 +9,13 @@ import sys
 import zipfile
 
 
-USAGE_TEXT = """AudioSubtitleOverlay 精简版使用说明
+USAGE_TEXT = """声幕 · 实时字幕与翻译
+精简版使用说明
 
 1. 解压后保持 AudioSubtitleOverlay 文件夹结构不变。
 2. 双击 AudioSubtitleOverlay\\AudioSubtitleOverlay.exe 即可运行，不需要安装Python。
 3. 不要单独移动或删除 _internal 文件夹；它包含应用自身的Windows运行时文件。
-4. 首次开始识别时，如果用户目录没有模型，应用会自动下载默认的 tiny 模型。
+4. 点击“开始识别”后，如果用户目录没有模型，应用会自动下载默认的 tiny 模型。
 5. 检测到 NVIDIA 驱动且选择GPU时，应用会先使用本机已有的兼容运行库；找不到时才准备 CUDA 12 运行库。
    GPU运行库约1.36GB，放在用户目录，不占用本压缩包体积；CPU模式不需要它。
 6. 下载界面会显示进度、速度，并支持暂停、继续和HTTP断点续传。网络中断后重新运行会继续保留的断点。
@@ -25,6 +26,8 @@ USAGE_TEXT = """AudioSubtitleOverlay 精简版使用说明
 8. 应用会校验组件的文件大小和SHA256；校验不通过的文件不会安装。
 9. 本地翻译首次使用时会按语言对下载模型，保存到 %APPDATA%\\AudioSubtitleOverlay\\translation_models；下载完成后可离线使用。
 10. 可在“音频来源”中选择 Beta 自动跟踪正在发声的应用；需要 Windows 10 build 20348 或更高版本，部分应用可能不支持。
+11. 关闭或最小化设置窗口后收进右下角托盘，字幕继续运行；点击托盘图标可恢复设置，右键可退出。
+12. “高级”中可应用实时优先参数，不会更换当前模型；启动选项也在这里调整。
 """
 
 
@@ -32,7 +35,7 @@ def _iter_files(source: Path):
     """按稳定顺序枚举需要写入压缩包的文件。"""
     for item in sorted((item for item in source.rglob("*") if item.is_file()), key=lambda item: item.as_posix()):
         # 使用包内说明替换构建目录可能残留的旧说明，避免ZIP出现重名条目。
-        if item.relative_to(source).as_posix() == "使用说明.txt":
+        if item.relative_to(source).as_posix() in {"使用说明.txt", "版本.txt", "LICENSE", "THIRD_PARTY_NOTICES.md", "COMMERCIAL-LICENSE.md"}:
             continue
         yield item
 
@@ -57,6 +60,8 @@ def build_archive(source: Path, output: Path) -> None:
         for path in _iter_files(source):
             archive.write(path, Path("AudioSubtitleOverlay") / path.relative_to(source))
         archive.writestr("AudioSubtitleOverlay/使用说明.txt", USAGE_TEXT)
+        for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "COMMERCIAL-LICENSE.md"):
+            archive.writestr(f"AudioSubtitleOverlay/{name}", Path(__file__).resolve().with_name(name).read_text(encoding="utf-8"))
         version_file = Path(__file__).resolve().with_name("VERSION")
         version = version_file.read_text(encoding="utf-8").strip()
         if not version:
