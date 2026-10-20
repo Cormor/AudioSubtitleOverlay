@@ -6,8 +6,8 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 if defined GITHUB_ACTIONS (
-    ".venv\Scripts\python.exe" tools\package_and_install.py --package-only
+    ".venv\Scripts\python.exe" -X utf8 tools\package_and_install.py --package-only
 ) else (
-    ".venv\Scripts\python.exe" tools\package_and_install.py
+    ".venv\Scripts\python.exe" -X utf8 tools\package_and_install.py
 )
 exit /b %errorlevel%

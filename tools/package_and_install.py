@@ -48,7 +48,7 @@ def main():
     receipt=dict(version=version,created_at=datetime.now().astimezone().isoformat(),
                  files=hashes,installation=installation,ci_package_only=args.package_only)
     (output/"delivery.local.json").write_text(json.dumps(receipt,ensure_ascii=False,indent=2),encoding="utf-8")
-    print(json.dumps({"version":version,"packages":list(hashes),"installed":installation is not None},ensure_ascii=False))
+    print(json.dumps({"version":version,"packages":list(hashes),"installed":installation is not None},ensure_ascii=True))
 
 
 if __name__=="__main__":main()
