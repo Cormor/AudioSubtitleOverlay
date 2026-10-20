@@ -520,7 +520,7 @@ class OverlayWindow:
             round(float(dpi), 3),
             self.render_scale,
             max(int(self.settings.overlay_translation_font_size), self.minimum_font_size),
-            bool(self._show_translation),
+            bool(self._translation_lane_visible()),
             bool(self._follow_tail),
         )
 
@@ -588,11 +588,16 @@ class OverlayWindow:
             styles,
             (width - 42) * scale,
             scale,
-            self._show_translation,
+            self._translation_lane_visible(),
             self._ledger,
             measures,
             column_gap=column_gap,
         )
+        # 正文与固定标题共享坐标：为标题和分隔线预留实际空间。
+        header_height = 18
+        for line in lines:
+            line["y"] += header_height * scale
+        content_height += header_height
         viewport_top = 10 * scale
         # 底部操作条不与正文共用像素，透明背景下缩放手柄也可命中。
         viewport_bottom = (height - self.resize_grip_hit_h) * scale
