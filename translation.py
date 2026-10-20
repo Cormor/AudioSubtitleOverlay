@@ -205,7 +205,10 @@ def _build_package_spec(package: TranslationPackage) -> ComponentSpec:
 
 
 def _find_model_root(path: Path, from_code: str, to_code: str) -> Path | None:
-    """查找已经解压且包含核心文件的语言模型目录。"""
+    """查找已经解压且包含核心文件的语言模型目录。
+
+    兼容新旧 Argos 包：新包用 model/config.json，旧包用 model/shared_vocabulary.txt。
+    """
     if not path.is_dir():
         return None
     for metadata_path in sorted(path.rglob("metadata.json")):
@@ -216,12 +219,16 @@ def _find_model_root(path: Path, from_code: str, to_code: str) -> Path | None:
             continue
         if metadata.get("from_code") != from_code or metadata.get("to_code") != to_code:
             continue
+        has_vocab = (
+            (root / "model" / "config.json").is_file()
+            or (root / "model" / "shared_vocabulary.txt").is_file()
+            or (root / "model" / "shared_vocabulary.json").is_file()
+        )
         required = (
-            root / "model" / "config.json",
             root / "model" / "model.bin",
             root / "sentencepiece.model",
         )
-        if all(item.is_file() for item in required):
+        if has_vocab and all(item.is_file() for item in required):
             return root
     return None
 
@@ -366,10 +373,16 @@ class ArgosTranslator:
 
 
 class MyMemoryTranslator:
-    """调用 MyMemory 公共接口的免费在线翻译。"""
+    """调用 MyMemory 公共接口的免费在线翻译（全局限流，避免 429）。"""
 
     endpoint = "https://api.mymemory.translated.net/get"
     max_bytes = 480
+    # 公共接口配额很紧：全进程限速 + 被拒后退避。
+    min_interval = 1.2
+    backoff_seconds = 45.0
+    _lock = threading.Lock()
+    _next_allowed_at = 0.0
+    _cooldown_until = 0.0
 
     def translate(self, text: str, source_language: str, target_language: str) -> str:
         if source_language == target_language:
@@ -384,22 +397,48 @@ class MyMemoryTranslator:
         pieces = self._split_text(text)
         translated = []
         for piece in pieces:
-            response = requests.get(
-                self.endpoint,
-                params={
-                    "q": piece,
-                    "langpair": f"{source_language}|{target_language}",
-                    "mt": "1",
-                },
-                timeout=15,
-            )
-            response.raise_for_status()
+            self._wait_turn()
+            try:
+                response = requests.get(
+                    self.endpoint,
+                    params={
+                        "q": piece,
+                        "langpair": f"{source_language}|{target_language}",
+                        "mt": "1",
+                    },
+                    timeout=15,
+                )
+            except Exception as error:
+                self._penalize(self.backoff_seconds)
+                raise RuntimeError(f"在线翻译请求失败：{error}") from error
+            if response.status_code == 429:
+                self._penalize(self.backoff_seconds)
+                raise RuntimeError("在线翻译被限流，请稍后再试，或改用「本地优先」翻译。")
+            if response.status_code >= 400:
+                raise RuntimeError(f"在线翻译接口错误：HTTP {response.status_code}")
             payload = response.json()
             value = payload.get("responseData", {}).get("translatedText")
             if not value:
                 raise RuntimeError("在线翻译接口没有返回译文。")
             translated.append(str(value))
         return "".join(translated)
+
+    @classmethod
+    def _wait_turn(cls) -> None:
+        while True:
+            with cls._lock:
+                now = time.monotonic()
+                wake_at = max(cls._next_allowed_at, cls._cooldown_until)
+                if now >= wake_at:
+                    cls._next_allowed_at = now + cls.min_interval
+                    return
+                delay = wake_at - now
+            time.sleep(min(delay, 1.0))
+
+    @classmethod
+    def _penalize(cls, seconds: float) -> None:
+        with cls._lock:
+            cls._cooldown_until = max(cls._cooldown_until, time.monotonic() + seconds)
 
     def _split_text(self, text: str) -> list[str]:
         """按句末和字节上限拆分，避免超过公共接口的单次请求限制。"""
@@ -445,6 +484,19 @@ class MyMemoryTranslator:
         return pieces
 
 
+def _local_models_ready(source_language: str, target_language: str) -> bool:
+    """仅检查已安装目录，不访问网络、不触发清单下载。"""
+    if _find_installed_model(source_language, target_language) is not None:
+        return True
+    # 经英语中转时，两侧都必须已安装。
+    if source_language != "en" and target_language != "en":
+        return (
+            _find_installed_model(source_language, "en") is not None
+            and _find_installed_model("en", target_language) is not None
+        )
+    return False
+
+
 class TranslationService:
     """根据用户选择执行本地、在线或本地优先翻译。"""
 
@@ -454,6 +506,7 @@ class TranslationService:
         on_status: Callable[[str], None] | None = None,
     ) -> None:
         self.backend = backend
+        self._on_status = on_status
         self._argos = ArgosTranslator(on_status=on_status)
         self._online = MyMemoryTranslator()
 
@@ -462,16 +515,21 @@ class TranslationService:
             return ""
         if not source_language or source_language == target_language:
             return text
-        if self.backend in LOCAL_TRANSLATION_BACKENDS:
-            return self._argos.translate(text, source_language, target_language)
+        # 在线-only：严格走在线，不因本地模型存在而改道。
         if self.backend == "仅使用免费在线 MyMemory":
             return self._online.translate(text, source_language, target_language)
-        try:
+        # 纯本地：交给 Argos（必要时再下载模型）。
+        if self.backend in LOCAL_TRANSLATION_BACKENDS:
             return self._argos.translate(text, source_language, target_language)
-        except Exception as local_error:
+        # 「本地优先，失败转在线」：仅此模式在模型已装时优先本地。
+        if _local_models_ready(source_language, target_language):
             try:
+                return self._argos.translate(text, source_language, target_language)
+            except Exception:
                 return self._online.translate(text, source_language, target_language)
-            except Exception as online_error:
-                raise RuntimeError(
-                    f"本地翻译失败：{local_error}；在线翻译失败：{online_error}"
-                ) from online_error
+        if self._on_status:
+            try:
+                self._on_status("本地翻译模型尚未就绪，本轮先用在线翻译。")
+            except Exception:
+                pass
+        return self._online.translate(text, source_language, target_language)

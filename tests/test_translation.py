@@ -105,6 +105,87 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual([(item[0], item[1]) for item in pairs], [("ja", "en"), ("en", "zh")])
 
 
+class TranslationBackendRoutingTests(unittest.TestCase):
+    """按用户选择分流：在线-only 不得改道本地。"""
+
+    def test_online_only_uses_online_even_when_local_models_installed(self):
+        service = TranslationService("仅使用免费在线 MyMemory")
+        service._argos = _FakeLocalTranslator("不应走本地")
+        service._online = _FakeOnlineTranslator("在线译文")
+        with patch("translation._local_models_ready", return_value=True):
+            self.assertEqual(service.translate("hello", "en", "zh"), "在线译文")
+
+    def test_local_first_prefers_local_only_when_ready(self):
+        service = TranslationService("本地优先，失败转在线")
+        service._argos = _FakeLocalTranslator("本地译文")
+        service._online = _FakeOnlineTranslator("在线译文")
+        with patch("translation._local_models_ready", return_value=True):
+            self.assertEqual(service.translate("hello", "en", "zh"), "本地译文")
+        with patch("translation._local_models_ready", return_value=False):
+            self.assertEqual(service.translate("hello", "en", "zh"), "在线译文")
+
+    def test_online_only_never_probes_local_readiness(self):
+        """在线-only 不得做本地 readiness，更不得改道本地。"""
+        service = TranslationService("仅使用免费在线 MyMemory")
+        service._argos = _FakeLocalTranslator("不应走本地")
+        service._online = _FakeOnlineTranslator("在线译文")
+        with patch("translation._local_models_ready") as ready, patch(
+            "translation._model_package_pairs"
+        ) as pairs, patch("translation._load_package_index") as index:
+            self.assertEqual(service.translate("hello", "en", "zh"), "在线译文")
+            ready.assert_not_called()
+            pairs.assert_not_called()
+            index.assert_not_called()
+
+    def test_local_models_ready_false_when_nothing_installed(self):
+        """离线且无安装模型：返回 False，且不访问清单。"""
+        with tempfile.TemporaryDirectory() as temporary, patch.object(
+            translation, "_translation_model_root", return_value=Path(temporary)
+        ), patch("translation._load_package_index") as index, patch(
+            "translation._model_package_pairs"
+        ) as pairs:
+            self.assertFalse(translation._local_models_ready("en", "zh"))
+            self.assertFalse(translation._local_models_ready("ja", "zh"))
+            index.assert_not_called()
+            pairs.assert_not_called()
+
+    def test_local_models_ready_never_loads_package_index(self):
+        """readiness 只查安装目录，不得触发网络/清单发现。"""
+        with patch("translation._model_package_pairs") as pairs, patch(
+            "translation._load_package_index"
+        ) as index:
+            translation._local_models_ready("en", "zh")
+            pairs.assert_not_called()
+            index.assert_not_called()
+
+    def test_local_models_ready_offline_pivot_when_both_installed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+
+            def _install(from_code: str, to_code: str):
+                model_root = root / f"{from_code}_{to_code}" / "t"
+                (model_root / "model").mkdir(parents=True)
+                (model_root / "metadata.json").write_text(
+                    json.dumps({"from_code": from_code, "to_code": to_code}),
+                    encoding="utf-8",
+                )
+                for relative in (
+                    "model/config.json",
+                    "model/model.bin",
+                    "sentencepiece.model",
+                ):
+                    (model_root / relative).write_bytes(b"t")
+                return root / f"{from_code}_{to_code}"
+
+            _install("ja", "en")
+            _install("en", "zh")
+            with patch.object(translation, "_translation_model_root", return_value=root):
+                self.assertTrue(translation._local_models_ready("ja", "zh"))
+                self.assertTrue(translation._local_models_ready("ja", "en"))
+                # 只有 ja_en 时，en→zh 尚未安装则未就绪
+                self.assertFalse(translation._local_models_ready("en", "ja"))
+
+
 class OfflineModelTests(unittest.TestCase):
     def setUp(self):
         translation._package_index = None
