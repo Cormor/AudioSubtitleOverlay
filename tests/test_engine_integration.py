@@ -33,6 +33,16 @@ class Capture:
 
 
 class EngineIntegrationTests(unittest.TestCase):
+    def segmented_session(self, recognizer):
+        # These tests exercise our buffering/commit contract using explicit VAD
+        # spans below. They do not load or test the external Silero runtime.
+        vad = SimpleNamespace(
+            VadOptions=lambda **kwargs: SimpleNamespace(**kwargs),
+            get_speech_timestamps=lambda *args: self.fail("test must supply VAD spans"),
+        )
+        with patch.dict("sys.modules", {"faster_whisper.vad": vad}):
+            return SegmentedTextSession(recognizer, "zh")
+
     def test_translation_change_during_final_does_not_discard_consumed_source(self):
         from asr_backends import TextHypothesis
         entered, finish, ready = threading.Event(), threading.Event(), threading.Event()
@@ -182,7 +192,7 @@ class EngineIntegrationTests(unittest.TestCase):
 
     def test_vad_silence_skips_asr_and_preserves_onset_padding(self):
         recognizer = SimpleNamespace(transcribe=lambda *args: self.fail("silent audio decoded"))
-        session = SegmentedTextSession(recognizer, "zh")
+        session = self.segmented_session(recognizer)
         session._vad = lambda *args: []
         for _ in range(100):
             self.assertEqual(session.accept_audio(np.zeros(8000, np.float32)), [])
@@ -190,7 +200,7 @@ class EngineIntegrationTests(unittest.TestCase):
 
     def test_text_only_final_commits_once_after_partial(self):
         recognizer = SimpleNamespace(transcribe=lambda *args: SimpleNamespace(text="你好", language="zh"))
-        session = SegmentedTextSession(recognizer, "zh")
+        session = self.segmented_session(recognizer)
         session._vad = lambda *args: [{"start": 0, "end": 8000}]
         partial = session.accept_audio(np.ones(8000, np.float32))
         final = session.accept_audio(np.zeros(8000, np.float32))
