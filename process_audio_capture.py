@@ -396,6 +396,8 @@ class _ProcessLoopbackClient:
             return None
 
         output: list[np.ndarray] = []
+        packet_clock = []
+        samples_in_batch = 0
         while True:
             if stop_event.is_set():
                 return None
@@ -442,6 +444,14 @@ class _ProcessLoopbackClient:
             )
             try:
                 if frame_count.value:
+                    packet_clock.append({
+                        "sample_start": samples_in_batch,
+                        "sample_end": samples_in_batch + frame_count.value,
+                        "engine_start": (qpc_position.value / 10_000_000
+                                         if qpc_position.value and not flags.value & 0x4 else None),
+                        "flags": int(flags.value),
+                    })
+                    samples_in_batch += frame_count.value
                     if flags.value & 0x2 or not data:
                         samples = np.zeros(frame_count.value, dtype=np.float32)
                     else:
@@ -465,6 +475,9 @@ class _ProcessLoopbackClient:
 
         if not output:
             return None
+        # Keep the native packet clock separate from callback arrival time.
+        # The diagnostic trace maps words through these spans, including gaps.
+        self.latest_timing = {"clock": "wasapi_qpc", "packets": packet_clock}
         return np.concatenate(output)
 
     def close(self) -> None:
@@ -496,6 +509,7 @@ class ProcessAudioCapture:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._active_process_id: int | None = None
+        self.latest_timing = None
 
     def start(
         self,
@@ -653,6 +667,7 @@ class ProcessAudioCapture:
                         report_status("Beta：采集暂时中断，正在重新寻找应用")
                         continue
                     if frames is not None and frames.size:
+                        self.latest_timing = getattr(loopback, "latest_timing", None)
                         on_audio(frames)
                 else:
                     self._stop_event.wait(0.05)

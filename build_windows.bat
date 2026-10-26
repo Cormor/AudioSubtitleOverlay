@@ -2,6 +2,22 @@
 setlocal
 cd /d "%~dp0."
 
+rem AI 任务传 ASR_TASK_ROOT，将临时构建、下载缓存和 metadata 放到对话工作区。
+if defined ASR_TASK_ROOT (
+    if not exist "%ASR_TASK_ROOT%\scratch" mkdir "%ASR_TASK_ROOT%\scratch"
+    set "ASR_DIST=%ASR_TASK_ROOT%\scratch\dist"
+    set "ASR_WORK=%ASR_TASK_ROOT%\scratch\build"
+    set "ASR_BUILD_METADATA_DIR=%ASR_TASK_ROOT%\scratch\build_metadata"
+    set "PIP_CACHE_DIR=%ASR_TASK_ROOT%\scratch\pip-cache"
+    set "PYINSTALLER_CONFIG_DIR=%ASR_TASK_ROOT%\scratch\pyinstaller-cache"
+    set "TMP=%ASR_TASK_ROOT%\scratch"
+    set "TEMP=%ASR_TASK_ROOT%\scratch"
+) else (
+    set "ASR_DIST=dist_minimal"
+    set "ASR_WORK=build_minimal"
+)
+set "PYTHONDONTWRITEBYTECODE=1"
+
 rem 不结束正在运行的安装版；安装更新使用并列版本目录。
 
 rem 优先使用 Python 3.11；没有时使用 py 启动器当前的 Python 3 版本
@@ -38,11 +54,11 @@ rem 打包阶段使用本地依赖，不查询 Hub 在线列表或读取隐式�
 set "HF_HUB_OFFLINE=1"
 set "HF_HUB_DISABLE_TELEMETRY=1"
 set "HF_HUB_DISABLE_IMPLICIT_TOKEN=1"
-python -m PyInstaller --noconfirm --clean --distpath dist_minimal --workpath build_minimal AudioSubtitleOverlay.spec
+python -m PyInstaller --noconfirm --clean --distpath "%ASR_DIST%" --workpath "%ASR_WORK%" AudioSubtitleOverlay.spec
 if errorlevel 1 (
     echo PyInstaller 构建失败。
     exit /b 1
 )
 
-echo 构建完成：dist_minimal\AudioSubtitleOverlay\AudioSubtitleOverlay.exe
+echo 构建完成：%ASR_DIST%\AudioSubtitleOverlay\AudioSubtitleOverlay.exe
 endlocal

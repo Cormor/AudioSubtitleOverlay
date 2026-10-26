@@ -146,14 +146,12 @@ def install_package(package, install_root=None):
     temporary_target = powershell(f"$w=New-Object -ComObject WScript.Shell; $w.CreateShortcut({literal(temporary)}).TargetPath")
     if Path(temporary_target).resolve() != executable.resolve():
         raise RuntimeError("新快捷方式未正确准备；保留原入口")
-    # Keep old shortcuts outside Start Menu as a reversible record.
-    backup = install_root / "shortcut-backups" / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    for index, item in enumerate(existing):
-        path = Path(item["path"])
-        if root_from_target(item["target"]).resolve() == install_root and path.exists():
-            backup.mkdir(parents=True, exist_ok=True)
-            path.rename(backup / f"{index}-{path.name}")
+    # Atomically replace the fixed entry after validating the new shortcut.
     temporary.replace(shortcut)
+    for item in existing:
+        path = Path(item["path"])
+        if path.resolve() != shortcut.resolve() and root_from_target(item["target"]).resolve() == install_root:
+            path.unlink(missing_ok=True)
     verify_installation(directory, manifest)
     readback = shortcuts()
     if len(readback) != 1 or Path(readback[0]["target"]).resolve() != executable.resolve():

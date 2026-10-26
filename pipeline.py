@@ -6,6 +6,8 @@ import logging
 import queue
 import threading
 import time
+import uuid
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Callable
@@ -18,7 +20,58 @@ from transcription import WhisperRecognizer
 from rolling_transcript import RollingTranscript
 from translation import TranslationService
 from subtitle_events import SourceUpdate
+from runtime_trace import get_runtime_trace
 from text_processing import remove_subtitle_credit
+from model_manager import find_local_model, ensure_model_available, validate_model_language
+
+
+class _AudioQueue(queue.Queue):
+    """Bound captured samples even when different sources use different blocks."""
+    def __init__(self, maximum_samples):
+        super().__init__(maxsize=2048)
+        self.maximum_samples = maximum_samples
+        self._samples = 0
+        self._epoch = 0
+        self._dropped = 0
+
+    def _put(self, item):
+        super()._put(item)
+        if item[0] is not None:
+            self._samples += item[0].size
+
+    def _get(self):
+        item = super()._get()
+        if item[0] is not None:
+            self._samples -= item[0].size
+        return item
+
+    @property
+    def pending_samples(self):
+        with self.mutex:
+            return self._samples
+
+    @property
+    def dropped_samples(self):
+        with self.mutex:
+            return self._dropped
+
+    def put_audio(self, frames, received_at):
+        discarded_samples = max(0, frames.size - self.maximum_samples)
+        frames = frames[-self.maximum_samples:].copy() if discarded_samples else frames
+        with self.not_full:
+            overloaded = self._samples + frames.size > self.maximum_samples or self._qsize() >= self.maxsize
+            if overloaded:
+                while self._qsize():
+                    old = self._get()[0]
+                    if old is not None:
+                        discarded_samples += old.size
+            if discarded_samples:
+                self._epoch += 1
+                self._dropped += discarded_samples
+            self._put((frames, None, received_at, self._epoch))
+            self.unfinished_tasks += 1
+            self.not_empty.notify()
+        return discarded_samples
 
 
 @dataclass(frozen=True)
@@ -44,6 +97,13 @@ class PipelineOptions:
     vad_silence_ms: int = 400
 
 
+def recognition_parameters(options):
+    return {name:getattr(options,name) for name in (
+        "beam_size","condition_on_previous_text","temperature_schedule",
+        "window_seconds","update_interval","repetition_penalty",
+        "no_repeat_ngram_size","no_speech_threshold","vad_silence_ms")}
+
+
 def translation_required(options: PipelineOptions, detected_language: str | None) -> bool:
     source = options.source_language or detected_language
     return bool(options.translation_enabled and source and options.target_language
@@ -56,7 +116,26 @@ def translation_only_change(previous: PipelineOptions, current: PipelineOptions)
                    translation_backend=previous.translation_backend) == previous
 
 
-_GPU_DEVICE_MODES = frozenset(("自动（优先GPU）", "NVIDIA GPU（float16）"))
+_GPU_DEVICE_MODES = frozenset(("自动（优先GPU）", "NVIDIA GPU（float16）", "NVIDIA GPU（int8_float16）"))
+
+
+def _text_backend(model_key):
+    return model_key == "sensevoice-int8" or model_key.startswith("zipformer-")
+
+
+def _new_recognizer(options, on_status):
+    validate_model_language(options.model_size, options.source_language)
+    if not _text_backend(options.model_size):
+        return WhisperRecognizer(options.model_size, options.device_mode, options.model_path, on_status=on_status)
+    from asr_backends import SenseVoiceRecognizer, ZipformerRecognizer
+    from pathlib import Path
+    path = Path(options.model_path) if options.model_path else find_local_model(options.model_size)
+    if path is None:
+        on_status(f"正在准备 {options.model_size} 本地模型……")
+        path = ensure_model_available(options.model_size, on_progress=lambda p: on_status(
+            f"{options.model_size}：{p.state}，已下载 {p.completed / 1024**2:.1f} MiB"))
+    cls = SenseVoiceRecognizer if options.model_size == "sensevoice-int8" else ZipformerRecognizer
+    return cls(str(path), language=options.source_language, cpu_threads=2)
 
 
 def recognition_window_start(received_samples, buffer_start, silence_boundary, *,
@@ -74,6 +153,8 @@ def recognition_window_start(received_samples, buffer_start, silence_boundary, *
 def _model_source_key(options: PipelineOptions) -> tuple[str, str]:
     """返回实际模型来源；指定目录时模型大小只用于界面显示。"""
     model_path = options.model_path.strip()
+    if _text_backend(options.model_size):
+        return options.model_size, model_path + ":" + str(options.source_language)
     if model_path:
         return "path", model_path
     return "model", options.model_size
@@ -87,9 +168,14 @@ def _device_requires_reload(
     """只有实际计算后端会变化时才重新加载识别模型。"""
     if recognizer is None:
         return True
+    if _text_backend(options.model_size):
+        return False
     if active_options.device_mode == options.device_mode:
         return False
     if recognizer.actual_device == "cuda":
+        if options.device_mode in {"NVIDIA GPU（float16）", "NVIDIA GPU（int8_float16）"}:
+            desired = "int8_float16" if "int8_float16" in options.device_mode else "float16"
+            return getattr(recognizer, "actual_compute_type", "float16") != desired
         return options.device_mode not in _GPU_DEVICE_MODES
     if recognizer.actual_device == "cpu":
         return options.device_mode != "CPU（int8）"
@@ -118,16 +204,28 @@ class LivePipeline:
         on_preview: Callable[[int, str, str | None, int], None] | None = None,
         on_update: Callable[[SourceUpdate], None] | None = None,
         on_reset: Callable[[], None] | None = None,
+        on_metrics: Callable[[dict], None] | None = None,
     ) -> None:
         self.options = options
         self._on_status = on_status
         self._on_source = on_source
         self._on_update = on_update
         self._on_reset = on_reset
+        self._on_metrics = on_metrics
+        self._last_metrics_at = 0.0
+        self._last_audio_meter_at = 0.0
+        self._last_signal_at = 0.0
+        self._phase = None
+        self._pipeline_id = uuid.uuid4().hex[:12]
+        self._active_capture_id = ""
+        self._capture_times = OrderedDict()
+        self._trace = get_runtime_trace()
+        self._last_inference_seconds = None
         self._on_translation = on_translation
         self._on_error = on_error
         self._on_stopped = on_stopped
-        self._queue: queue.Queue[tuple[np.ndarray | None, Exception | None, float]] = queue.Queue()
+        self._queue = _AudioQueue(15 * SystemAudioCapture.sample_rate)
+        self._capture_error = None
         self._configuration_queue: queue.Queue[PipelineOptions] = queue.Queue()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -153,6 +251,9 @@ class LivePipeline:
         if self._thread and self._thread.is_alive():
             raise RuntimeError("识别流水线已经运行")
         self._stop_event.clear()
+        self._emit_phase("preparing")
+        self._trace.record("pipeline_started", pipeline_id=self._pipeline_id,
+                           model=self.options.model_size, language=self.options.source_language)
         with self._stopped_callback_lock:
             self._stopped_callback_sent = False
         self._thread = threading.Thread(
@@ -163,14 +264,14 @@ class LivePipeline:
         self._thread.start()
 
     def stop(self) -> None:
-        """发出停止请求并立即通知界面，不等待模型或设备线程。"""
+        """请求停止；工作线程释放模型后才通知界面，避免新旧模型重叠。"""
         self._stop_event.set()
         capture = self._capture
         if capture:
             capture.stop(wait=False)
         self._translation_pool.shutdown(wait=False, cancel_futures=True)
-        # 即使 CTranslate2 当前仍在 transcribe，界面也立即恢复可操作状态。
-        self._notify_stopped()
+        if self._thread is None:
+            self._notify_stopped()
 
     def set_languages(self, source_language: str | None, target_language: str) -> None:
         """兼容旧调用方，更新后续音频使用的语言。"""
@@ -191,7 +292,10 @@ class LivePipeline:
             self._source_language = options.source_language
             self._target_language = options.target_language
             self._configuration_generation += 1
+            generation=self._configuration_generation
             self._pending_translations.clear()
+        logging.info("识别参数已提交：代次=%s，模型=%s，参数=%s",
+                     generation,options.model_size,recognition_parameters(options))
         self._configuration_queue.put(options)
         return True
 
@@ -235,6 +339,10 @@ class LivePipeline:
         received_samples = 0
         quality_decoded_until = 0
         transcript = RollingTranscript()
+        text_session = None
+        seen_dropped = 0
+        active_audio_epoch = 0
+        candidate = None
         last_audio_status_at = time.monotonic()
         try:
             while not self._stop_event.is_set():
@@ -268,6 +376,8 @@ class LivePipeline:
                         received_samples = 0
                         quality_decoded_until = 0
                         transcript = RollingTranscript()
+                        if text_session is not None:
+                            text_session.reset()
                         last_audio_status_at = time.monotonic()
                         if self._on_reset:
                             self._on_reset()
@@ -282,15 +392,14 @@ class LivePipeline:
                             if active_options is None
                             else "正在应用新的识别设置……"
                         )
+                        self._emit_phase("preparing")
                         # 新模型开始加载后不再继续使用旧识别器；失败时等待配置变化，避免重复加载。
+                        if recognizer is not None and hasattr(recognizer, "close"):
+                            recognizer.close()
                         recognizer = None
-                        candidate = WhisperRecognizer(
-                            options.model_size,
-                            options.device_mode,
-                            options.model_path,
-                            on_status=self._on_status,
-                        )
+                        text_session = None
                         try:
+                            candidate = _new_recognizer(options, self._on_status)
                             candidate.load()
                         except Exception as error:
                             failed_generation = generation
@@ -299,12 +408,32 @@ class LivePipeline:
                                 self._on_error(f"新的识别设置无法使用：{error}")
                             continue
                         if self._stop_event.is_set():
+                            if hasattr(candidate, "close"):
+                                candidate.close()
+                            candidate = None
                             break
                         if not self._is_configuration_current(generation):
-                            continue
+                            current_options, current_generation = self._get_configuration()
+                            if translation_only_change(options, current_options):
+                                options, generation = current_options, current_generation
+                            else:
+                                if hasattr(candidate, "close"):
+                                    candidate.close()
+                                candidate = None
+                                continue
                         recognizer = candidate
+                        if options.model_size == "sensevoice-int8":
+                            from recognition_sessions import SegmentedTextSession
+                            text_session = SegmentedTextSession(recognizer, options.source_language,
+                                                                silence_ms=options.vad_silence_ms)
+                        elif options.model_size.startswith("zipformer-"):
+                            text_session = recognizer
                         failed_generation = -1
 
+                    if text_session is not None and options.model_size == "sensevoice-int8" and configuration_changed and not model_changed and not translation_only_change(active_options, options):
+                        from recognition_sessions import SegmentedTextSession
+                        text_session = SegmentedTextSession(recognizer, options.source_language,
+                                                            silence_ms=options.vad_silence_ms)
                     active_options = options
                     active_generation = generation
                     requested_samples = int(options.update_interval * SystemAudioCapture.sample_rate)
@@ -314,9 +443,10 @@ class LivePipeline:
                         else self.cpu_quality_update_samples,
                     )
                     last_audio_status_at = time.monotonic()
-                    logging.info("识别配置已生效：源语言=%s，目标语言=%s，翻译开关=%s，搜索范围=%s，前文参考=%s，温度=%s",
-                                 options.source_language or "auto", options.target_language, options.translation_enabled,
-                                 options.beam_size, options.condition_on_previous_text, options.temperature_schedule)
+                    logging.info("识别配置已生效：代次=%s，模型=%s，源语言=%s，目标语言=%s，翻译开关=%s，实际触发间隔=%s秒，参数=%s",
+                                 generation,options.model_size,options.source_language or "auto",options.target_language,
+                                 options.translation_enabled,quality_update_samples/SystemAudioCapture.sample_rate,
+                                 recognition_parameters(options))
                     if capture is None:
                         self._on_status("正在连接音频设备……")
                         capture = (
@@ -325,19 +455,28 @@ class LivePipeline:
                             else SystemAudioCapture(options.audio_device)
                         )
                         self._capture = capture
+                        capture_id = uuid.uuid4().hex[:12]
+                        self._active_capture_id = capture_id
                         capture.start(
-                            self._on_audio,
+                            lambda frames, c=capture, key=capture_id: self._on_audio(
+                                frames, capture=c, capture_id=key),
                             self._on_capture_error,
-                            on_ready=lambda name, active_capture=capture: self._on_status(
-                                name
-                                if isinstance(active_capture, ProcessAudioCapture)
-                                else f"正在识别；已打开采集设备：{name}"
-                            ),
+                            on_ready=lambda name, active_capture=capture: self._on_capture_ready(
+                                name, active_capture),
                         )
+                    elif self._is_configuration_current(generation):
+                        # The existing capture does not repeat on_ready when only
+                        # decoder parameters change. Acknowledge actual application.
+                        if text_session is not None:
+                            self._on_status("设置已生效；继续使用 CPU 本地识别与当前音频来源。")
+                        else:
+                            self._on_status(
+                                f"设置已生效；搜索 {options.beam_size}，窗口 {options.window_seconds} 秒，"
+                                f"更新间隔 {quality_update_samples/SystemAudioCapture.sample_rate:g} 秒；继续监听当前音频来源。")
                     continue
 
                 try:
-                    frames, error, received_at = self._queue.get(timeout=0.2)
+                    frames, error, received_at, audio_epoch = self._queue.get(timeout=0.2)
                 except queue.Empty:
                     now = time.monotonic()
                     if (
@@ -356,11 +495,15 @@ class LivePipeline:
                     self._on_error("无法采集音频，请检查所选设备后重新开始。")
                     self._stop_event.wait()
                     break
+                if self._capture_error is not None:
+                    self._on_error("音频来源已断开，请重新选择设备后停止并重新开始。")
+                    self._stop_event.wait()
+                    break
                 new_parts = [frames] if frames is not None else []
                 # 把推理期间收到的全部音频合并到下一次窗口，不逐个重放过期触发点。
                 while True:
                     try:
-                        more, more_error, more_received_at = self._queue.get_nowait()
+                        more, more_error, more_received_at, more_epoch = self._queue.get_nowait()
                     except queue.Empty:
                         break
                     if more_error:
@@ -369,22 +512,78 @@ class LivePipeline:
                         self._stop_event.wait()
                         break
                     if more is not None:
+                        if more_epoch != audio_epoch:
+                            # A producer overflow occurred inside this drain.
+                            # Never concatenate speech from opposite sides of it.
+                            received_samples += sum(part.size for part in new_parts)
+                            new_parts = []
+                            audio_epoch = more_epoch
                         new_parts.append(more)
                         received_at = more_received_at
                 if self._stop_event.is_set():
                     break
                 new_samples = sum(item.size for item in new_parts)
+                if audio_epoch != active_audio_epoch:
+                    lost = self._dropped_samples - seen_dropped
+                    seen_dropped = self._dropped_samples
+                    active_audio_epoch = audio_epoch
+                    received_samples += lost
+                    buffer = np.empty(0, dtype=np.float32)
+                    buffer_start = received_samples
+                    transcript = RollingTranscript()
+                    if text_session is not None:
+                        text_session.reset()
+                    self._on_status(f"识别暂时跟不上音频，已跳过 {lost / 16000:.1f} 秒积压；可选择更轻的模型。")
                 if new_samples:
-                    buffer = np.concatenate([buffer, *new_parts])
+                    if text_session is None:
+                        buffer = np.concatenate([buffer, *new_parts])
                     received_samples += new_samples
                 if not new_samples:
                     continue
 
                 options, generation = self._get_configuration()
                 if generation != active_generation:
-                    continue
+                    if text_session is None or active_options is None or not translation_only_change(active_options, options):
+                        continue
                 source_language = options.source_language
                 target_language = options.target_language
+                if text_session is not None:
+                    began = time.perf_counter()
+                    updates = text_session.accept_audio(np.concatenate(new_parts))
+                    finished = time.perf_counter()
+                    if self._stop_event.is_set():
+                        continue
+                    current_options, current_generation = self._get_configuration()
+                    if not translation_only_change(options, current_options):
+                        continue
+                    # Text sessions have already consumed/committed this audio.
+                    # Translation preferences do not invalidate that recognition.
+                    options, generation = current_options, current_generation
+                    target_language = options.target_language
+                    for hypothesis in updates:
+                        with self._lock:
+                            if not translation_only_change(options, self.options):
+                                break
+                            options = self.options
+                            generation = self._configuration_generation
+                            target_language = options.target_language
+                            detected = options.source_language or hypothesis.language
+                            self._latest_source_language = detected
+                            if not translation_required(options, detected):
+                                self._pending_translations.clear()
+                            self._translation_sequence += 1
+                            sequence = self._translation_sequence
+                        self._publish_update(SourceUpdate(
+                            sequence, hypothesis.segment_id, hypothesis.text, detected,
+                            received_samples / 16000, received_at, began, finished, None,
+                            session_id=generation, revision=hypothesis.revision,
+                            final=hypothesis.final, pipeline_id=self._pipeline_id,
+                            capture_id=self._capture_times.get(received_at, self._active_capture_id)))
+                        if hypothesis.final and translation_required(options, detected):
+                            self._submit_translation(sequence, hypothesis.text, detected, target_language,
+                                                     hypothesis.segment_id, generation, options.translation_backend)
+                    self._report_metrics(new_parts, recognizer, finished - began)
+                    continue
                 if received_samples - quality_decoded_until < quality_update_samples:
                     continue
                 desired_start = recognition_window_start(
@@ -424,14 +623,23 @@ class LivePipeline:
                     continue
                 inference_finished = time.perf_counter()
                 inference_seconds = inference_finished - inference_started
+                self._report_metrics(new_parts, recognizer, inference_seconds)
                 logging.info(
                     "滚动识别：设备=%s/%s，触发周期=%.2f秒，音频区间=%.2f～%.2f秒，推理=%.3f秒，待处理约=%.2f秒",
                     recognizer.actual_device, recognizer.actual_compute_type,
                     quality_update_samples / SystemAudioCapture.sample_rate,
                     buffer_start / SystemAudioCapture.sample_rate, received_samples / SystemAudioCapture.sample_rate,
-                    inference_seconds, self._queue.qsize() * SystemAudioCapture.block_size / SystemAudioCapture.sample_rate,
+                    inference_seconds, self._queue.pending_samples / SystemAudioCapture.sample_rate,
                 )
                 detected_language = source_language or result.language
+                word_spans = (tuple((word.text, buffer_start / 16000 + word.start,
+                                     buffer_start / 16000 + word.end) for word in result.words)
+                              if self._trace.enabled and self._trace.include_text else ())
+                self._trace.record("recognition", pipeline_id=self._pipeline_id,
+                                   capture_id=self._capture_times.get(received_at, self._active_capture_id),
+                                   audio_start=buffer_start / 16000, audio_end=received_samples / 16000,
+                                   received_at=received_at, inference_started_at=inference_started,
+                                   inference_finished_at=inference_finished, word_spans=word_spans)
                 with self._lock:
                     self._latest_source_language = detected_language
                     if not translation_required(options, detected_language):
@@ -445,19 +653,19 @@ class LivePipeline:
                     with self._lock:
                         self._translation_sequence += 1
                         sequence = self._translation_sequence
-                    if self._on_update:
-                        last_word_end = max((word.end for word in result.words), default=None)
-                        last_word_received_at = (
-                            None if last_word_end is None else
-                            received_at - (buffer.size / SystemAudioCapture.sample_rate - last_word_end)
-                        )
-                        self._on_update(SourceUpdate(
-                            sequence, block_id, text, detected_language,
-                            received_samples / SystemAudioCapture.sample_rate,
-                            received_at, inference_started, inference_finished, last_word_received_at,
-                        ))
-                    else:
-                        self._on_source(sequence, text, detected_language, block_id)
+                    last_word_end = max((word.end for word in result.words), default=None)
+                    last_word_received_at = (
+                        None if last_word_end is None else
+                        received_at - (buffer.size / SystemAudioCapture.sample_rate - last_word_end)
+                    )
+                    self._publish_update(SourceUpdate(
+                        sequence, block_id, text, detected_language,
+                        received_samples / SystemAudioCapture.sample_rate,
+                        received_at, inference_started, inference_finished, last_word_received_at,
+                        session_id=generation, pipeline_id=self._pipeline_id,
+                        capture_id=self._capture_times.get(received_at, self._active_capture_id),
+                        word_spans=word_spans,
+                    ))
                     if translation_required(options, detected_language):
                         self._submit_translation(
                             sequence,
@@ -475,18 +683,85 @@ class LivePipeline:
                 self._stop_event.wait()
         finally:
             if capture:
-                capture.stop(wait=False)
+                capture.stop(wait=True)
             if self._capture is capture:
                 self._capture = None
-            self._translation_pool.shutdown(wait=False, cancel_futures=True)
+            self._translation_pool.shutdown(wait=True, cancel_futures=True)
+            if recognizer is not None and hasattr(recognizer, "close"):
+                recognizer.close()
+            if candidate is not None and candidate is not recognizer and hasattr(candidate, "close"):
+                candidate.close()
+            candidate = None
+            recognizer = None
+            text_session = None
+            self._trace.record("pipeline_stopped", pipeline_id=self._pipeline_id)
             self._notify_stopped()
 
-    def _on_audio(self, frames: np.ndarray) -> None:
+    def _publish_update(self, update):
+        self._trace.record_source(update)
+        if self._on_update:
+            self._on_update(update)
+        else:
+            self._on_source(update.sequence, update.text, update.language, update.block_id)
+
+    def _emit_phase(self, phase):
+        if phase != self._phase:
+            self._phase = phase
+            if self._on_metrics:
+                self._on_metrics({"phase": phase})
+
+    def _on_capture_ready(self, name, capture):
+        self._on_status(name if isinstance(capture, ProcessAudioCapture)
+                        else f"正在识别；已打开采集设备：{name}")
+        self._emit_phase("waiting_audio")
+
+    def _report_metrics(self, parts, recognizer, inference_seconds):
+        if self._on_metrics:
+            if inference_seconds >= .001:
+                self._last_inference_seconds = inference_seconds
+            now = time.monotonic()
+            if now - self._last_metrics_at < .2:
+                return
+            self._last_metrics_at = now
+            samples = sum(a.size for a in parts)
+            rms = float(np.sqrt(sum(float(np.dot(a, a)) for a in parts) / max(1, samples)))
+            phase = "recognizing" if time.monotonic() - self._last_signal_at < 2 else "waiting_audio"
+            self._on_metrics(dict(input_rms=rms, inference_seconds=self._last_inference_seconds,
+                                  backlog_seconds=self._queue.pending_samples / 16000,
+                                  actual_device=recognizer.actual_device,
+                                  actual_compute_type=recognizer.actual_compute_type,
+                                  dropped_seconds=self._dropped_samples / 16000, phase=phase))
+
+    @property
+    def _dropped_samples(self):
+        return self._queue.dropped_samples
+
+    def _on_audio(self, frames: np.ndarray, *, capture=None, capture_id="") -> None:
         if not self._stop_event.is_set():
-            self._queue.put((frames, None, time.perf_counter()))
+            received_at = time.perf_counter()
+            if self._trace.enabled:
+                self._capture_times[received_at] = capture_id
+                while len(self._capture_times) > 4096:
+                    self._capture_times.popitem(last=False)
+                self._trace.record_audio(frames, received_at, capture_id,
+                                         getattr(capture, "latest_timing", None))
+            self._queue.put_audio(frames, received_at)
+            now = time.monotonic()
+            if self._on_metrics and now - self._last_audio_meter_at >= .2:
+                self._last_audio_meter_at = now
+                rms = float(np.sqrt(np.mean(frames * frames))) if frames.size else 0.0
+                if rms > .00001:
+                    self._last_signal_at = now
+                phase = "recognizing" if now - self._last_signal_at < 2 else "waiting_audio"
+                self._on_metrics(dict(input_rms=rms, phase=phase,
+                                      backlog_seconds=self._queue.pending_samples / 16000))
 
     def _on_capture_error(self, error: Exception) -> None:
-        self._queue.put((None, error, time.perf_counter()))
+        self._capture_error = error
+        try:
+            self._queue.put_nowait((None, error, time.perf_counter(), self._queue._epoch))
+        except queue.Full:
+            pass
 
     def _notify_stopped(self) -> None:
         """只向界面发送一次停止通知，避免后台线程结束时重复刷新状态。"""

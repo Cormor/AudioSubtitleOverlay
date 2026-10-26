@@ -24,7 +24,7 @@ windows_version = VSVersionInfo(
     ])]), VarFileInfo([VarStruct('Translation', [2052, 1200])])],
 )
 
-metadata_dir = Path('build_metadata')
+metadata_dir = Path(os.environ.get('ASR_BUILD_METADATA_DIR', 'build_metadata'))
 metadata_dir.mkdir(exist_ok=True)
 source_commit = os.environ.get('GITHUB_SHA') or os.environ.get('SOURCE_COMMIT')
 source_state = 'clean' if os.environ.get('GITHUB_SHA') else os.environ.get('SOURCE_STATE', 'unknown')
@@ -46,7 +46,7 @@ source_hashes = {path.as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
 datas = [
     ('component_manifest.json', '.'),
     ('VERSION', '.'),
-    ('build_metadata/BUILD_INFO.json', '.'),
+    (str(metadata_dir / 'BUILD_INFO.json'), '.'),
     ('assets/brand', 'assets/brand'),
 ]
 datas += copy_metadata('pystray') + copy_metadata('six')
@@ -63,6 +63,10 @@ tmp_ret = collect_all('huggingface_hub')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('sentencepiece')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('sherpa_onnx')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+# sherpa-onnx 2 splits native dependencies into a separate distribution.
+datas += copy_metadata('sherpa-onnx-core')
 
 
 a = Analysis(

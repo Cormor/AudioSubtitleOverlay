@@ -155,6 +155,108 @@ class DraftDisplayTests(unittest.TestCase):
 
 
 class OverlapRegressionTests(unittest.TestCase):
+    def test_new_terminal_is_previewed_then_can_be_withdrawn_without_a_tail_block(self):
+        transcript = RollingTranscript()
+        initial = [word("这次表现不", 0, .8), word("差", .8, 1),
+                   word("后面继续说话", 1.05, 2)]
+        provisional = [word("这次表现不。", 0, .8), word("差。", .8, 1),
+                       word("后面继续说话", 1.05, 2)]
+        corrected = [word("这次表现不差。", 0, 1), word("后面继续说话", 1.05, 2.2)]
+        transcript.update(initial, 0, 2)
+        transcript.update(provisional, 0, 2.1)
+        self.assertIn("这次表现不。差。", transcript._published[1])
+        self.assertEqual(transcript.block_id, 1)
+        self.assertEqual(transcript.safe_decode_start, 0)
+        transcript.update(corrected, 0, 2.2)
+        transcript.update(corrected, 0, 2.3)
+        self.assertEqual(transcript._published[1], "这次表现不差。")
+        self.assertEqual(transcript._published[2], "后面继续说话")
+        self.assertNotIn("差。", transcript._published.values())
+
+    def test_new_terminal_confirmed_in_next_window_keeps_the_previous_block(self):
+        transcript = RollingTranscript()
+        words = [word("第一句", 0, .8), word("下一句话还在说", 1, 2)]
+        marked = [word("第一句。", 0, .8), word("下一句话还在说", 1, 2)]
+        transcript.update(words, 0, 2)
+        transcript.update(marked, 0, 2.1)
+        self.assertEqual(transcript.block_id, 1)
+        transcript.update(marked, 0, 2.2)
+        self.assertEqual(transcript._published[1], "第一句。")
+        self.assertEqual(transcript._published[2], "下一句话还在说")
+        corrected_tail = [word("第一句。", 0, .8), word("下一句确实还在说", 1, 2.4)]
+        transcript.update(corrected_tail, 0, 2.4)
+        self.assertEqual(transcript._published[1], "第一句。")
+
+    def test_terminal_fluctuation_does_not_permanently_block_confirmation(self):
+        transcript = RollingTranscript()
+        unmarked = [word("这个结果不差", 0, 1), word("接下来继续讲", 1.05, 2)]
+        marked = [word("这个结果不。差。", 0, 1), word("接下来继续讲", 1.05, 2)]
+        for index, words in enumerate((unmarked, marked, unmarked, marked, unmarked, unmarked)):
+            transcript.update(words, 0, 2 + index * .05)
+        self.assertTrue(transcript.confirmed_text.startswith("这个结果不差"))
+        self.assertEqual(transcript.block_id, 1)
+
+    def test_comma_decimal_and_abbreviation_changes_do_not_delay_body(self):
+        for initial, corrected in (("你好世界", "你好，世界"),
+                                   ("value 314 keeps going", "value 3.14 keeps going"),
+                                   ("eg apple keeps going", "e.g. apple keeps going")):
+            with self.subTest(corrected=corrected):
+                transcript = RollingTranscript()
+                transcript.update([word(initial, 0, 1), word(" 尾部", 1.1, 2)], 0, 2)
+                transcript.update([word(corrected, 0, 1), word(" 尾部", 1.1, 2)], 0, 2.1)
+                self.assertTrue(transcript.confirmed_text.startswith(corrected))
+
+    def test_real_one_character_sentence_after_a_pause_is_preserved(self):
+        transcript = RollingTranscript()
+        words = [word("前一句", 0, .8), word("好。", 1.6, 1.9)]
+        feed(transcript, words, 2.7)
+        self.assertEqual(transcript._published[1], "前一句。")
+        self.assertEqual(transcript._published[2], "好。")
+        self.assertGreater(transcript.safe_decode_start, .8)
+        self.assertFalse(transcript.pending)
+
+    def test_repeated_characters_survive_terminal_withdrawal(self):
+        transcript = RollingTranscript()
+        words = [word("好好说话", 0, .8), word("后面继续", .85, 2)]
+        marked = [word("好。好说话", 0, .8), word("后面继续", .85, 2)]
+        for index, result in enumerate((words, marked, words, words)):
+            transcript.update(result, 0, 2 + index * .1)
+        self.assertTrue(transcript._published[1].startswith("好好说话"))
+        self.assertEqual(transcript.block_id, 1)
+
+    def test_single_confirmed_character_retiming_does_not_repeat_it(self):
+        transcript = RollingTranscript()
+        original = [word("好", 0, .16), word("后", 1.2, 2)]
+        corrected = [word("好", 0, .2), word("后", 1.2, 2)]
+        transcript.update(original, 0, 2)
+        transcript.update(original, 0, 2.1)
+        transcript.update(corrected, 0, 2.2)
+        self.assertEqual(transcript.confirmed_text, "好")
+        self.assertNotIn("好好", "".join(transcript._published.values()))
+
+    def test_new_repeated_single_character_after_boundary_is_kept(self):
+        transcript = RollingTranscript()
+        original = [word("好", 0, .2), word("后", 1.2, 2)]
+        transcript.update(original, 0, 2)
+        transcript.update(original, 0, 2.1)
+        # A shifted window contains a second real 好, starting after the old
+        # confirmed boundary. Equal text alone must not remove this new audio.
+        later = [word("好", .02, .22), word("后", 1, 1.8)]
+        transcript.update(later, .2, 2.2)
+        transcript.update(later, .2, 2.3)
+        self.assertTrue(transcript.confirmed_text.startswith("好好"))
+
+    def test_stop_like_empty_window_after_terminal_withdrawal_keeps_text(self):
+        transcript = RollingTranscript()
+        words = [word("连续句尾不差", 0, 1), word("下一段", 1.05, 2)]
+        marked = [word("连续句尾不。差", 0, 1), word("下一段", 1.05, 2)]
+        for index, result in enumerate((words, marked, words)):
+            transcript.update(result, 0, 2 + index * .1)
+        transcript.update([], 0, 3)
+        self.assertIn("连续句尾不差", "".join(transcript._published.values()))
+        self.assertFalse(transcript.pending)
+
+
     def test_expired_prefix_is_confirmed_before_retimed_window_dedup(self):
         transcript = RollingTranscript()
         transcript.update([word("hello", 0, .5), word(" world", .5, 1.5)], 0, 1.5)

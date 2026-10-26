@@ -280,13 +280,14 @@ class PipelineReconfigurationTests(unittest.TestCase):
 
     def test_quality_options_apply_without_reloading_model(self):
         errors = []
+        statuses = []
 
         with patch.object(pipeline, "SystemAudioCapture", _FakeCapture), patch.object(
             pipeline, "WhisperRecognizer", _FakeRecognizer
         ):
             runner = LivePipeline(
                 self._options(),
-                lambda _text: None,
+                statuses.append,
                 lambda *_args: None,
                 lambda *_args: None,
                 errors.append,
@@ -322,6 +323,7 @@ class PipelineReconfigurationTests(unittest.TestCase):
             _FakeRecognizer.instances[0].decode_options[-1]["temperature_schedule"],
             "0,0.2,0.4",
         )
+        self.assertTrue(any("设置已生效；搜索 5，窗口 8 秒，更新间隔 0.5 秒" in status for status in statuses))
         self.assertEqual(errors, [])
 
     def test_failed_model_change_waits_for_another_configuration(self):

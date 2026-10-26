@@ -14,6 +14,13 @@ class SourceUpdate:
     inference_started_at: float
     inference_finished_at: float
     last_word_received_at: float | None
+    source_id: str = "audio"
+    session_id: int = 0
+    revision: int = 0
+    final: bool = True
+    pipeline_id: str = ""
+    capture_id: str = ""
+    word_spans: tuple[tuple[str, float, float], ...] = ()
 
     def measurements(self, presented_at: float) -> dict[str, float | None]:
         """输入回调时间不包含声卡内部缓冲；末词时间来自模型估计。"""

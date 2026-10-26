@@ -15,16 +15,20 @@ from urllib.parse import quote
 
 from download_manager import ComponentFile, ComponentSpec, DownloadProgress
 from settings import application_data_dir
+from engine_models import ONNX_MODELS
 
 
 @dataclass(frozen=True)
 class ModelDefinition:
-    """应用支持的一个 faster-whisper 模型。"""
+    """应用支持的模型及其处理能力。"""
 
     key: str
     repo_id: str
     display_name: str
     description: str
+    backend: str = "whisper"
+    languages: tuple[str, ...] = ()
+    streaming: bool = False
 
 
 MODEL_DEFINITIONS = (
@@ -58,10 +62,43 @@ MODEL_DEFINITIONS = (
         "large-v3",
         "较大的多语言模型，适合对识别质量要求较高且资源充足的设备。",
     ),
+) + (
+    ModelDefinition("large-v3-turbo", "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+                    "Whisper Turbo · 多语言", "减少解码层的多语言模型；适合有 GPU 的视频字幕，仍使用滚动窗口。"),
+    ModelDefinition("tiny.en", "Systran/faster-whisper-tiny.en", "Whisper Tiny English",
+                    "英语专用的小模型；适合轻量英语字幕，不支持中文。", languages=("en",)),
+    ModelDefinition("base.en", "Systran/faster-whisper-base.en", "Whisper Base English",
+                    "英语专用，体积与计算量高于 tiny.en；准确率需按素材比较。", languages=("en",)),
+    ModelDefinition("distil-large-v3", "Systran/faster-distil-whisper-large-v3", "Distil Whisper · 英语",
+                    "英语蒸馏模型，适合需要较高英语质量的 GPU 场景。", languages=("en",)),
+) + tuple(
+    ModelDefinition(key, item["repo_id"],
+                    ("SenseVoice INT8 · 中粤英日韩" if key == "sensevoice-int8" else
+                     "Zipformer CTC Small · 中英" if "small" in key else
+                     "Zipformer CTC Medium · 中英" if "medium" in key else "Zipformer Transducer · 中英"),
+                    item["description"], backend="sensevoice" if key == "sensevoice-int8" else "zipformer",
+                    languages=tuple(item["languages"]), streaming=item["streaming"])
+    for key, item in ONNX_MODELS.items()
 )
 
 MODEL_BY_KEY = {item.key: item for item in MODEL_DEFINITIONS}
 MODEL_MARKER = ".audio-subtitle-overlay-model.json"
+
+
+def validate_model_language(model_key: str, language: str | None) -> None:
+    """在准备模型之前指出不兼容的语言，自动检测只使用模型支持的范围。"""
+    definition = model_definition(model_key)
+    if language and definition.languages and language not in definition.languages:
+        raise ValueError(f"{definition.display_name} 不支持语言 {language}；请选择兼容的模型或语言。")
+    if language == "yue" and definition.backend == "whisper" and model_key not in {"large-v3", "large-v3-turbo"}:
+        raise ValueError("该 Whisper 变体未提供粤语支持；请选择 SenseVoice 或 large-v3 / Turbo。")
+
+
+def model_directory_complete(model_key: str, path: Path) -> bool:
+    if model_key in ONNX_MODELS:
+        return path.is_dir() and all((path / name).is_file() and (path / name).stat().st_size == info["size"]
+                                     for name, info in ONNX_MODELS[model_key]["files"].items())
+    return model_is_complete(path)
 
 
 def model_definition(model_key: str) -> ModelDefinition:
@@ -152,7 +189,7 @@ def _local_huggingface_snapshots(model_key: str) -> list[Path]:
             if hf_home
             else Path.home() / ".cache" / "huggingface" / "hub"
         )
-    repository = cache_root / f"models--Systran--faster-whisper-{model_key}"
+    repository = cache_root / ("models--" + model_definition(model_key).repo_id.replace("/", "--"))
     snapshot_root = repository / "snapshots"
     if not snapshot_root.is_dir():
         return []
@@ -167,13 +204,13 @@ def find_local_model(model_key: str, explicit_path: str = "") -> Path | None:
     model_definition(model_key)
     if explicit_path.strip():
         path = Path(explicit_path.strip()).expanduser()
-        return path if model_is_complete(path) else None
+        return path if model_directory_complete(model_key, path) else None
 
     candidates = [managed_model_dir(model_key)]
     candidates.extend(_bundled_model_candidates(model_key))
     candidates.extend(_local_huggingface_snapshots(model_key))
     for candidate in candidates:
-        if model_is_complete(candidate):
+        if model_directory_complete(model_key, candidate):
             return candidate
     return None
 
@@ -185,6 +222,14 @@ def model_cache_hint() -> str:
 
 def _remote_model_files(definition: ModelDefinition) -> tuple[str, list[ComponentFile]]:
     """读取固定远端修订版本及文件元数据，供通用下载器使用。"""
+    if definition.key in ONNX_MODELS:
+        item = ONNX_MODELS[definition.key]
+        return item["revision"], [
+            ComponentFile(path=name,
+                          url=f"https://huggingface.co/{item['repo_id']}/resolve/{item['revision']}/{quote(name)}?download=true",
+                          size=info["size"], sha256=info["sha256"])
+            for name, info in item["files"].items()
+        ]
     from huggingface_hub import HfApi
 
     info = HfApi().model_info(definition.repo_id, files_metadata=True)
@@ -257,16 +302,16 @@ class ModelManager:
     def local_status(self, model_key: str) -> LocalModelStatus:
         """读取模型本地状态，不访问网络。"""
         managed = managed_model_dir(model_key)
-        if model_is_complete(managed):
+        if model_directory_complete(model_key, managed):
             return LocalModelStatus("已下载", managed, directory_size(managed))
         if managed.exists():
             return LocalModelStatus("下载未完成", managed, directory_size(managed))
 
         for candidate in _bundled_model_candidates(model_key):
-            if model_is_complete(candidate):
+            if model_directory_complete(model_key, candidate):
                 return LocalModelStatus("已内置", candidate, directory_size(candidate))
         for candidate in _local_huggingface_snapshots(model_key):
-            if model_is_complete(candidate):
+            if model_directory_complete(model_key, candidate):
                 return LocalModelStatus("本机缓存", candidate, directory_size(candidate))
         return LocalModelStatus("未下载", None, 0)
 
@@ -376,8 +421,10 @@ class ModelManagerWindow:
         self._runtime_progress: DownloadProgress | None = None
         self._window = tk.Toplevel(master)
         self._window.title("语音模型管理")
-        self._window.geometry("1120x600")
-        self._window.minsize(920, 480)
+        width = max(600, min(1120, self._window.winfo_screenwidth() - 60))
+        height = max(380, min(700, self._window.winfo_screenheight() - 80))
+        self._window.geometry(f"{width}x{height}")
+        self._window.minsize(min(800, width), min(480, height))
         self._window.protocol("WM_DELETE_WINDOW", self.close)
 
         container = ttk.Frame(self._window, padding=12)
@@ -407,12 +454,14 @@ class ModelManagerWindow:
             "local": "本地大小",
             "description": "说明",
         }
-        widths = {"model": 90, "status": 100, "progress": 190, "size": 110, "local": 110, "description": 430}
+        widths = {"model": 235, "status": 90, "progress": 150, "size": 90, "local": 90, "description": 380}
         for column in columns:
             self.tree.heading(column, text=headings[column])
             self.tree.column(column, width=widths[column], anchor="w")
         scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scrollbar.set)
+        horizontal = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
+        horizontal.pack(side="bottom", fill="x")
+        self.tree.configure(yscrollcommand=scrollbar.set, xscrollcommand=horizontal.set)
         self.tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         self.tree.bind("<<TreeviewSelect>>", self._selection_changed)

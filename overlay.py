@@ -15,6 +15,7 @@ from functools import lru_cache
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from layered_window import LayeredWindow
+from screen_bounds import Rect, parse_geometry, constrain, monitor_areas
 from subtitle_layout import (
     EntryView,
     Motion1D,
@@ -52,7 +53,10 @@ class OverlayWindow:
 
     def __init__(self, master: tk.Misc, settings, on_open_settings, on_close) -> None:
         self.settings = settings
+        self._configuration_active = False
+        self._settings_master = master
         self.on_presented = None
+        self.visible_source_fragments = {}
         self._on_open_settings = on_open_settings
         self._on_close = on_close
         self._entries: list[tuple[str, str]] = []
@@ -88,6 +92,11 @@ class OverlayWindow:
         self._scrollbar_show_until = 0.0
         self._lane_idle_after_id = None
         self._geometry_origin = (0, 0, 0, 0)
+        self._bounds_after_id = None
+        self._screen_poll_after_id = None
+        self._bounds_work_area = None
+        self._screen_signature = None
+        self._requested_rect = parse_geometry(self.settings.overlay_geometry)
         self._redraw_pending = False
         self._redraw_after = None
         self._animation_after = None
@@ -147,12 +156,63 @@ class OverlayWindow:
         self._menu.add_command(label="隐藏悬浮窗", command=self.hide)
         self._menu.add_separator()
         self._menu.add_command(label="退出程序", command=self._on_close)
+        self._set_bounded_geometry(self._requested_rect)
+        self._screen_poll_after_id = self.window.after(350, self._poll_screen_bounds)
+
+    def _current_rect(self):
+        if self.window.winfo_ismapped():
+            return Rect(self.window.winfo_x(), self.window.winfo_y(),
+                        self.window.winfo_width(), self.window.winfo_height())
+        return self._requested_rect
+
+    def _set_bounded_geometry(self, rect, *, pointer=None, resize=False):
+        bounded,work=constrain(rect,monitor_areas(self.window),pointer=pointer,
+                               resize=resize,minimum=(self.minimum_window_width,self.minimum_window_height))
+        self._bounds_work_area=work
+        self._requested_rect=bounded
+        self._cap_height=min(self._cap_height,work.height)
+        # Avoid generating Configure events when geometry has not changed.
+        if self.window.geometry()!=bounded.geometry():
+            self.window.geometry(bounded.geometry())
+        return bounded
+
+    def _enforce_bounds(self):
+        if self._bounds_after_id is not None:
+            self.window.after_cancel(self._bounds_after_id)
+            self._bounds_after_id=None
+        if not self.window.winfo_exists():
+            return
+        before=self._current_rect()
+        bounded=self._set_bounded_geometry(before)
+        if bounded!=before:
+            self._height_animation_bottom=bounded.bottom
+            self._layout_cache_key=None
+            self._request_redraw()
+        return bounded
+
+    def _finish_bounds_check(self):
+        self._bounds_after_id=None
+        self._enforce_bounds()
+
+    def _queue_bounds_check(self):
+        if self._bounds_after_id is None:
+            self._bounds_after_id=self.window.after_idle(self._finish_bounds_check)
+
+    def _poll_screen_bounds(self):
+        self._screen_poll_after_id=None
+        if not self.window.winfo_exists():
+            return
+        signature=(monitor_areas(self.window),self.window.winfo_fpixels('1i'))
+        if signature!=self._screen_signature:
+            self._screen_signature=signature
+            self._enforce_bounds()
+        self._screen_poll_after_id=self.window.after(350,self._poll_screen_bounds)
 
     @staticmethod
     def _parse_geometry_height(geometry: str) -> int:
         """从“宽x高+X+Y”几何串解析用户高度。"""
         try:
-            return int(geometry.split("x", 1)[1].split("+", 1)[0])
+            return parse_geometry(geometry).height
         except (AttributeError, ValueError, IndexError):
             return 0
 
@@ -224,13 +284,45 @@ class OverlayWindow:
 
     def show(self) -> None:
         """显示悬浮窗。"""
+        self._set_bounded_geometry(self._current_rect())
         self.window.deiconify()
         if self._separate_layers:
             self.text_window.deiconify()
             self.text_window.lift(self.window)
         self.window.update_idletasks()
+        self._enforce_bounds()
+        self.window.update_idletasks()
         self._sync_layer_geometry()
         self._redraw()
+        if self._configuration_active:
+            self.window.lower(self._settings_master)
+
+    def set_configuration_active(self, active: bool) -> None:
+        """Keep the settings usable, restoring the user's overlay preference on blur."""
+        active = bool(active)
+        if self._configuration_active == active:
+            return
+        self._configuration_active = active
+        try:
+            self.window.wm_attributes("-topmost", bool(self.settings.overlay_topmost and not active))
+            if active and self.window.winfo_ismapped():
+                self.window.lower(self._settings_master)
+        except tk.TclError:
+            pass
+
+    def restore_position(self) -> None:
+        """把字幕找回指针所在屏幕，保留当前阅读样式。"""
+        pointer = (self.window.winfo_pointerx(), self.window.winfo_pointery())
+        monitors = monitor_areas(self.window)
+        current = self._current_rect()
+        _, work = constrain(current, monitors, pointer=pointer)
+        width = min(current.width, work.width)
+        height = min(current.height, work.height)
+        rect = Rect(work.x + (work.width - width) // 2,
+                    work.y + max(0, work.height - height - round(work.height * .06)), width, height)
+        self._set_bounded_geometry(rect, pointer=pointer)
+        self.show()
+        self.persist_geometry()
 
     def hide(self) -> None:
         """隐藏悬浮窗。"""
@@ -244,10 +336,8 @@ class OverlayWindow:
         """保存用户阅读区的宽高和位置。"""
         if not self.window.winfo_exists():
             return
-        width = self.window.winfo_width()
-        x = self.window.winfo_x()
-        y = self.window.winfo_y()
-        self.settings.overlay_geometry = f"{width}x{round(self._cap_height)}+{x}+{y}"
+        bounded=self._enforce_bounds()
+        self.settings.overlay_geometry=Rect(bounded.x,bounded.y,bounded.width,round(self._cap_height)).geometry()
 
     def set_content(
         self,
@@ -384,22 +474,28 @@ class OverlayWindow:
 
     def apply_settings(self) -> None:
         """应用颜色、两层透明度、字号和置顶设置。"""
-        self.window.wm_attributes("-topmost", bool(self.settings.overlay_topmost))
+        self.window.wm_attributes("-topmost", bool(self.settings.overlay_topmost
+                                                  and not self._configuration_active))
         self._layout_cache_key = None
         self._request_redraw()
 
     def close(self) -> None:
         """销毁悬浮窗。"""
         if self.window.winfo_exists():
+            self.persist_geometry()
             self._cancel_auto_scroll()
             self._cancel_lane_idle_check()
+            for name in ("_bounds_after_id", "_screen_poll_after_id"):
+                token=getattr(self,name,None)
+                if token is not None:
+                    self.window.after_cancel(token)
+                    setattr(self,name,None)
             if self._animation_after is not None:
                 self.window.after_cancel(self._animation_after)
                 self._animation_after = None
             if self._redraw_after is not None:
                 self.window.after_cancel(self._redraw_after)
                 self._redraw_after = None
-            self.persist_geometry()
             if self._separate_layers and self.text_window.winfo_exists():
                 self.text_window.destroy()
             self.window.destroy()
@@ -675,8 +771,11 @@ class OverlayWindow:
     def _draw_content(self, font_size: int, now: float) -> int:
         """使用超采样 RGBA 图像绘制，固定最新字幕组并保留历史滚动位置。"""
         scale = self.render_scale
-        width = max(self.canvas.winfo_width(), self.minimum_window_width)
-        height = max(self.canvas.winfo_height(), self.minimum_window_height)
+        work=getattr(self,"_bounds_work_area",None)
+        min_width=min(self.minimum_window_width,work.width) if work else self.minimum_window_width
+        min_height=min(self.minimum_window_height,work.height) if work else self.minimum_window_height
+        width = max(self.canvas.winfo_width(), min_width)
+        height = max(self.canvas.winfo_height(), min_height)
         dpi = self.window.winfo_fpixels("1i")
         layout = self._prepare_layout(font_size, width, height, dpi)
         style_specs = layout["style_specs"]
@@ -691,6 +790,7 @@ class OverlayWindow:
         )
         self._clamp_scroll_offset(height - 50)
         source_indices = set()
+        visible_fragments = {}
         foreground = Image.new("RGBA", (width, height))
         draw = ImageDraw.Draw(foreground)
         # 实时与回看统一为「原文在上 / 译文在下」成对列表。
@@ -730,6 +830,12 @@ class OverlayWindow:
             if entry is not None:
                 last_entry = entry
             self._draw_line(foreground, line, line_y, style_specs, 1.0)
+            if line["style"] == "source" and entry is not None:
+                visible_fragments.setdefault(entry, []).append({
+                    "text": line["text"],
+                    "char_start": line.get("char_start", max(0, line["char_end"] - len(line["text"]))),
+                    "char_end": line["char_end"],
+                })
             if (
                 line["style"] == "source"
                 and line["entry"] is not None
@@ -795,6 +901,7 @@ class OverlayWindow:
         image.putalpha(ImageChops.darker(alpha, mask))
         self._last_image = image
         self._layer.present(self._last_image)
+        self.visible_source_fragments = visible_fragments
         if self.on_presented is not None:
             self.on_presented(time.perf_counter(), source_indices)
         return content_height
@@ -811,7 +918,9 @@ class OverlayWindow:
             screen_height = self.window.winfo_screenheight()
         except tk.TclError:
             return False
-        return (y + window_height) >= screen_height * 0.55
+        work=getattr(self,"_bounds_work_area",None)
+        return ((y+window_height-work.y)>=work.height*0.55 if work
+                else (y+window_height)>=screen_height*0.55)
 
     def _apply_window_height(self, height: int) -> None:
         """只改变高度；锚点在动画开始时确定，动画期间保持稳定。"""
@@ -823,7 +932,7 @@ class OverlayWindow:
             y = self._height_animation_bottom - height
         else:
             y = self.window.winfo_y()
-        self.window.geometry(f"{width}x{height}+{x}+{y}")
+        self._set_bounded_geometry(Rect(x,y,width,height))
 
     def _row_heights(self):
         specs = self._layout_cache["style_specs"] if self._layout_cache else None
@@ -865,7 +974,8 @@ class OverlayWindow:
             screen_height = self.window.winfo_screenheight()
         except tk.TclError:
             screen_height = 800
-        return max(240, int(screen_height * 0.72))
+        work=getattr(self,"_bounds_work_area",None)
+        return min(work.height,max(240,int(work.height*0.72))) if work else max(240,int(screen_height*0.72))
 
     # ------------------------------------------------------------------
     # 交互
@@ -950,9 +1060,11 @@ class OverlayWindow:
         if self._drag_mode == "resize":
             new_width = max(self.minimum_window_width, old_width + delta_x)
             new_height = max(self._reading_minimum_height(1), old_height + delta_y)
-            self.window.geometry(f"{int(new_width)}x{int(new_height)}+{old_x}+{old_y}")
+            self._set_bounded_geometry(Rect(old_x,old_y,int(new_width),int(new_height)),
+                                       pointer=(old_x+1,old_y+1),resize=True)
         else:
-            self.window.geometry(f"{old_width}x{old_height}+{old_x + delta_x}+{old_y + delta_y}")
+            self._set_bounded_geometry(Rect(old_x+delta_x,old_y+delta_y,old_width,old_height),
+                                       pointer=(event.x_root,event.y_root))
 
     def _on_button_release(self, _event) -> None:
         resized = self._drag_mode == "resize"
@@ -1030,6 +1142,8 @@ class OverlayWindow:
         self._request_redraw()
 
     def _on_configure(self, _event) -> None:
+        if _event.widget is self.window:
+            self._queue_bounds_check()
         self._sync_layer_geometry()
         self._layout_cache_key = None
         self._request_redraw()

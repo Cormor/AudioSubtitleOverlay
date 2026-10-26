@@ -8,15 +8,23 @@ import sys
 import zipfile
 
 
-USAGE_TEXT = """tiny模型离线文件包
+USAGE_TEXT = """Whisper tiny 离线模型 / Offline model files
 
-将本压缩包解压到主程序压缩包解压后的同级目录，保持两个压缩包都使用 AudioSubtitleOverlay 文件夹。
-合并后目录应为 AudioSubtitleOverlay\\models\\tiny\\model.bin 等文件。
-再次双击 AudioSubtitleOverlay\\AudioSubtitleOverlay.exe 时，程序会优先使用该目录中的模型，不再下载 tiny。
+本包不含主程序，也不包含默认SenseVoice模型。
+1. 先完整解压主程序ZIP。
+2. 将本模型ZIP解压到同一父目录，合并两个 AudioSubtitleOverlay 文件夹。
+3. 合并后应有 AudioSubtitleOverlay/models/tiny/model.bin 等文件。
+4. 打开主程序，在“模型”中手动选择 Whisper Tiny。选择其它模型仍需各自准备文件。
 
-模型来源：Systran/faster-whisper-tiny
-固定提交：d90ca5fe260221311c53c58e660288d3deb8d356
-程序启动时仍会校验文件大小和SHA256。
+This package contains Whisper tiny only, not the app or the default SenseVoice model.
+Extract the portable app first, then extract this ZIP into the same parent folder.
+Merge the two AudioSubtitleOverlay folders. You should have
+AudioSubtitleOverlay/models/tiny/model.bin beside the app's other files.
+Run the app and manually select Whisper Tiny in 模型 (model).
+
+模型来源 / Source: Systran/faster-whisper-tiny
+固定提交 / Revision: d90ca5fe260221311c53c58e660288d3deb8d356
+程序会校验文件大小与SHA256 / File size and SHA256 are checked before use.
 """
 
 

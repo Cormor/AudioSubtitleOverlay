@@ -85,3 +85,6 @@ id_ed25519*
 known_hosts
 credentials.json
 secrets.json
+
+# Public product-tour screenshots
+!docs/images/*.jpg

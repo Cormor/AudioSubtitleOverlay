@@ -14,13 +14,31 @@ import time
 from typing import Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request, urlopen as _stdlib_urlopen, getproxies, build_opener, ProxyHandler
 import uuid
 import zipfile
 
 
 LOGGER = logging.getLogger(__name__)
 COMPONENT_MARKER = ".audio-subtitle-overlay-component.json"
+
+
+def urlopen(request, **kwargs):
+    """Honor an explicitly configured ALL_PROXY for HTTP(S) downloads.
+
+    urllib does not map the all scheme to https. This matters when a Windows
+    process inherits ALL_PROXY, which also suppresses its registry proxy lookup.
+    Keep loopback test servers local and preserve normal per-scheme/no_proxy rules.
+    """
+    proxies = getproxies()
+    url = request.full_url if isinstance(request, Request) else str(request)
+    parsed = urlparse(url)
+    if (parsed.scheme in {"http", "https"} and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+            and "all" in proxies and parsed.scheme not in proxies):
+        normalized = dict(proxies)
+        normalized[parsed.scheme] = proxies["all"]
+        return build_opener(ProxyHandler(normalized)).open(request, **kwargs)
+    return _stdlib_urlopen(request, **kwargs)
 
 
 class DownloadError(RuntimeError):

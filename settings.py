@@ -37,9 +37,10 @@ class Settings:
 
     auto_start: bool = False
     start_minimized: bool = False
+    show_runtime_details: bool = False
     source_language: str = "自动检测"
     target_language: str = "中文"
-    recognition_model: str = "tiny"
+    recognition_model: str = "sensevoice-int8"
     recognition_device: str = "自动（优先GPU）"
     recognition_beam_size: int = 1
     recognition_condition_on_previous_text: bool = False
@@ -53,7 +54,7 @@ class Settings:
     model_path: str = ""
     loopback_device: str = ""
     translation_enabled: bool = True
-    translation_backend: str = "本地优先，失败转在线"
+    translation_backend: str = "仅使用本地翻译"
     overlay_background: str = "#152033"
     overlay_text_color: str = "#ffffff"
     overlay_outline: str = "#000000"
@@ -110,7 +111,7 @@ class Settings:
                 }
             else:
                 values["recognition_condition_on_previous_text"] = bool(condition)
-        for key in ("overlay_auto_height", "overlay_animation", "overlay_topmost", "translation_enabled", "auto_start", "start_minimized"):
+        for key in ("overlay_auto_height", "overlay_animation", "overlay_topmost", "translation_enabled", "auto_start", "start_minimized", "show_runtime_details"):
             if key in values and not isinstance(values[key], bool):
                 values[key] = str(values[key]).lower() in {"1", "true", "yes", "on", "启用"}
         if "recognition_temperature_schedule" in values and values[

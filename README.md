@@ -1,59 +1,77 @@
 # 声幕 · 实时字幕与翻译
 
-<p align="center"><img src="assets/brand/icon.png" alt="声幕图标：声波与字幕" width="96"></p>
+<p align="center"><img src="assets/brand/icon.png" alt="声幕图标" width="88"></p>
 
-声幕是一款 Windows 桌面字幕应用：把电脑播放或麦克风输入的声音识别为文字，在悬浮窗中显示原文和译文。原项目名称为 AudioSubtitleOverlay，配置、模型与已有文件位置保持兼容。
+<p align="center"><strong>把电脑里的声音，变成看得见的字幕。</strong></p>
+<p align="center">简体中文 · <a href="README.en.md">English</a> · <a href="https://github.com/Cormor/AudioSubtitleOverlay/releases/latest">下载最新版</a> · <a href="docs/technical-guide.md">技术文档</a></p>
 
-<p align="center"><img src="docs/screenshots/main-window.png" alt="声幕设置窗口" width="760"></p>
+看视频、听直播、上网课，或把麦克风中的讲话转成文字：声幕会在 Windows 桌面浮窗中显示字幕，还能在原文下方显示译文。无需给视频文件先做转写，也不需要安装 Python。
 
-## 使用起来
+![三步开始：下载解压、选择声音和语言、开始字幕](docs/images/quick-start.svg)
 
-1. 从 [GitHub Releases](https://github.com/Cormor/AudioSubtitleOverlay/releases) 下载主程序 ZIP，解压并保留完整的 `AudioSubtitleOverlay` 文件夹。
-2. 双击 `AudioSubtitleOverlay\AudioSubtitleOverlay.exe`，选择音频来源、源语言和目标语言，点击“开始识别”。不需要预装 Python。
-3. 在“字幕外观”中选择预设，或分别调整原文、译文的字号、颜色与透明度。
-4. 关闭或最小化设置窗口后，程序收进右下角托盘，字幕继续运行。点击托盘图标可重新打开设置；右键菜单也可显示／隐藏字幕、开始／停止识别或退出。
+## 它能帮你做什么
 
-首次安装默认等待用户开始识别；已有配置升级后保留原来的自动开始行为。启动选项可在“高级”中调整。本次只想打开设置、不开始采集时，可以使用 `AudioSubtitleOverlay.exe --no-autostart`。
+- **边听边看字幕**：识别电脑正在播放的声音，或选择麦克风。文字先以草稿出现，再随语音修订。
+- **原文和译文一起看**：可选本地翻译或在线翻译；只看原文时关闭“显示译文”。
+- **按屏幕调整字幕**：移动浮窗，修改字号、颜色、背景透明度，也可一键切换外观预设。
+- **回看与保存文字**：回看最近 64 段字幕，复制内容或导出 TXT。
+- **收起设置继续用**：关闭或最小化设置窗口后，字幕继续运行；从右下角托盘图标重新打开设置。
 
-## 功能
+![声幕主窗口：顶部开始按钮，下方选择音源、语言、模型和翻译](docs/images/overview.jpg)
 
-- **字幕与翻译**：原文在上、译文在下成对显示；译文未到时显示等待占位。已有译文后，即使原文停更，译文区也保持显示。
-- **回看与导出**：保留最近 64 段确认字幕。滚轮或滚动条回看，右键回到最新字幕，也可导出当前内容为 TXT。
-- **识别设置**：支持运行中切换音频来源、语言、模型和计算设备。提供极速 tiny、流畅 base、均衡 small、精度优先 medium、大型精度 large-v3 五档推荐组合。选择后点击应用才会生效；可取消“同时切换模型”以保留当前模型或自定义目录。高级页可手动调整搜索范围、参考前文、解码回退、最大音频窗口、更新间隔、重复惩罚、禁止重复词元组、无语音阈值和语音分段停顿。各档是调参起点，不保证模型越大就越准；实际速度也受游戏负载影响。
-- **离线与在线翻译**：本地翻译模型首次使用时按语言对准备，完成后可离线使用；在线 MyMemory 后端会把待翻译文字发送到公共接口。纯在线、纯本地和本地优先三种选择分别生效。
-- **系统播放与麦克风**：支持播放回环及麦克风输入。Beta 来源可尝试跟踪正在发声的应用，需要 Windows 10 build 20348 或更高版本，部分应用可能不支持。
-- **CPU 与 GPU**：支持 CPU 运行；选择 GPU 时优先复用兼容运行库，缺少时再按需准备。
-- **设置自动保存**：常用操作固定在顶部；识别、字幕外观和高级设置分开，窗口缩小时可以滚动查看。
+*上图为使用独立配置拍摄的实际界面，处于开始前状态；音源名称取决于你的扬声器、耳机和麦克风。*
 
-原文已停止一段时间且本轮一直没有译文时，会收起空译文区；新原文或译文到达后重新显示。原文与目标语言相同时不调用翻译后端。
+## 下载哪个文件
 
-## 下载文件
+**[打开最新版本下载页 →](https://github.com/Cormor/AudioSubtitleOverlay/releases/latest)**，在页面的 **Assets** 区域找下面的文件：
 
-- `AudioSubtitleOverlay_Portable_v1.3.0.zip`：主程序。
-- `AudioSubtitleOverlay_tiny_model_v1.3.0.zip`：可选的离线 tiny 语音模型包，解压到主程序相同的父目录。
-- `SHA256SUMS.txt`：发布包校验值。
+| 文件 | 用途 |
+|---|---|
+| **`AudioSubtitleOverlay_Portable_v1.4.1.zip`** | **主程序，第一次使用下载这个。** 适用于 Windows 10/11 64 位电脑。 |
+| `AudioSubtitleOverlay_tiny_model_v1.4.1.zip` | 可选的 Whisper tiny 模型。只有手动选择这个模型、并希望离线准备它时才需要。 |
+| `SHA256SUMS.txt` | 文件校验值，供需要检查下载完整性时使用。 |
 
-主程序不内置语音或翻译模型。联网时会按需准备缺少的组件；需要携带默认模型离线运行时，请另外下载 tiny 模型包。主程序文件名和配置目录继续沿用 AudioSubtitleOverlay，避免升级后丢失已有设置和模型。
+GitHub 自动提供的 **Source code (zip/tar.gz)** 是源码，不能当作主程序双击运行。默认 SenseVoice 模型不包含在可选 tiny 包中，会在首次使用时单独准备。
 
-## 本地维护与发布
+## 第一次使用
 
-每次发布都同时更新本机安装版，使用版本目录保留旧文件，并只保留一个当前的开始菜单入口。构建、打包、安装和同步正式发布包的步骤见 [发布流程](docs/releasing.md)。
+### 1. 解压并打开
 
-## English
+右键主程序 ZIP，选择“全部解压”。进入解压后的 `AudioSubtitleOverlay` 文件夹，双击 **`AudioSubtitleOverlay.exe`**。请保留旁边的 `_internal` 文件夹，程序需要它才能运行。
 
-**声幕** is a Windows live-caption and translation overlay, formerly named AudioSubtitleOverlay. It supports system playback and microphone input, paired source/translated captions, recent-history export, and CPU or NVIDIA GPU recognition. Closing or minimizing Settings keeps the app in the notification area. Its menu can restore Settings, show/hide captions, start/stop recognition, or exit.
+### 2. 选择要听的声音
 
-Extract the portable ZIP and run `AudioSubtitleOverlay/AudioSubtitleOverlay.exe`. Keep the complete directory, including `_internal`. The executable and configuration paths retain the previous identity for upgrade compatibility. Speech and translation models are prepared separately as needed; an optional tiny-model ZIP is available for offline use. `--no-autostart` opens the app without starting capture for that launch.
+在“实时字幕”页选择：
 
-## 许可证与商业使用 | License and commercial use
+- **音源**：看视频或听直播，选择带“系统播放”的扬声器或耳机；转写自己的讲话，选择麦克风。
+- **声音语言**：选择对方正在说的语言，或使用自动检测。
+- **模型**：第一次可保留默认 **SenseVoice · CPU 五语**，支持中文、粤语、英语、日语、韩语，不需要独立显卡。更多语言或 NVIDIA GPU 方案见[模型选择指南](docs/technical-guide.md#模型与设备)。
+- **翻译**：需要译文时选择目标语言；同一种语言转成同一种语言时，只显示识别原文，不调用翻译。
 
-项目自有代码采用 `AudioSubtitleOverlay Non-Commercial Source-Available License 1.0`，完整条款见 [`LICENSE`](LICENSE)。该许可证允许源代码可见，但不是 OSI 认可的 Open Source License。
+### 3. 点击“开始字幕”
 
-- 个人、教育、研究、测试、爱好及其他非商业使用默认允许。
-- 修改、集成、重新打包或再分发，必须公开完整对应源码和修改说明，或事先取得书面授权。
-- 销售、收费分发、商业集成、企业内部业务使用、收入型服务及其他商业使用，必须事先取得商业授权。
-- 第三方库、模型和运行库适用各自的许可条款，见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+第一次会下载所选方案缺少的模型；需要本地翻译时，还会按语言对准备翻译模型。等待准备完成，再播放有讲话的内容。字幕会出现在浮窗里，主窗口也会显示最近结果和输入电平。
 
-The original code is provided under the `AudioSubtitleOverlay Non-Commercial Source-Available License 1.0`; see [`LICENSE`](LICENSE) for the complete terms. Non-commercial use is allowed by default. Modifications, integration, repackaging, and redistribution require public corresponding source with change notes or prior written authorization. All commercial use requires prior written authorization. Third-party components remain under their own terms.
+模型准备完成后，本地识别可以离线使用。选择 **MyMemory 在线翻译**或允许本地失败后转在线时，待译文字会发送给在线服务。
 
-商业授权说明见 [`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md)。
+## 把字幕调成你喜欢的样子
+
+打开“字幕外观”，先试试“深色高对比”“浅色清晰”或“透明描边”，再调整原文、译文字号和透明度。在浮窗上拖动可移动位置，拖右下角可调整大小；找不到浮窗时，点击“找回字幕窗”。
+
+![字幕外观：预设、字号、颜色、透明度和找回字幕窗](docs/images/appearance.jpg)
+
+## 常见问题
+
+**开始了却没有文字？** 先确认内容确实有讲话，再看顶部输入电平。没有输入时，在“音源”中改选正在使用的扬声器或耳机。Beta 自动跟踪发声应用有系统版本和兼容限制，排查时先用明确的“系统播放”设备。
+
+**字幕慢，或者有错字？** 先保留默认模型；使用 Whisper 大模型且电脑负载较高时，可换较小模型或合适的 GPU 方案。草稿修订属于实时识别过程，专名、口音和背景声仍可能造成错字。
+
+**关闭设置后，程序去哪了？** 查看 Windows 右下角托盘，必要时点向上的箭头展开隐藏图标，点击声幕图标恢复。设置窗口获得焦点时，`Ctrl+Enter` 开始/停止，`Ctrl+Q` 退出；托盘右键菜单也可退出。
+
+**升级会丢设置吗？** 配置和模型保存在用户应用数据目录，升级会保留。解压新版本后使用新文件夹中的程序，退出旧版本，避免同时运行两份。
+
+更多排查、模型说明、离线准备和构建方法见 **[技术文档](docs/technical-guide.md)**。目前程序界面为中文，英文使用指南见 **[English](README.en.md)**。
+
+## 许可证
+
+项目自有代码采用 [Non-Commercial Source-Available License 1.0](LICENSE)，允许非商业使用；商业使用需事先获得授权。修改、集成、重新打包或再分发须遵守许可证中的对应源码公开及授权要求。第三方库、模型和运行库适用各自条款，见[第三方说明](THIRD_PARTY_NOTICES.md)与[商业授权说明](COMMERCIAL-LICENSE.md)。

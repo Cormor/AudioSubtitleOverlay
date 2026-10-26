@@ -22,3 +22,24 @@ class PackagingTests(unittest.TestCase):
                 self.assertEqual(len(names),len(set(name.casefold() for name in names)))
                 self.assertNotEqual(archive.read("AudioSubtitleOverlay/LICENSE"),b"stale")
                 self.assertIn("版本：v",archive.read("AudioSubtitleOverlay/版本.txt").decode("utf-8"))
+
+
+class BuildProvenanceTests(unittest.TestCase):
+    def test_uncommitted_build_requires_explicit_local_mode_and_cannot_ship_from_ci(self):
+        import hashlib
+        import json
+        from tools.package_and_install import verify_build
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            source=root/'app'
+            (source/'_internal').mkdir(parents=True)
+            code=root/'main.py'
+            code.write_text('print("local")\n')
+            build=dict(version='1.3.1',source_commit='a'*40,source_state='modified',
+                       source_files={'main.py':hashlib.sha256(code.read_bytes()).hexdigest()})
+            (source/'_internal/BUILD_INFO.json').write_text(json.dumps(build))
+            with self.assertRaises(RuntimeError):verify_build(source,'1.3.1',root=root)
+            self.assertEqual(verify_build(source,'1.3.1',local_build=True,root=root),build)
+            with self.assertRaises(RuntimeError):verify_build(source,'1.3.1',local_build=True,ci=True,root=root)
+            code.write_text('print("changed after build")\n')
+            with self.assertRaises(RuntimeError):verify_build(source,'1.3.1',local_build=True,root=root)
