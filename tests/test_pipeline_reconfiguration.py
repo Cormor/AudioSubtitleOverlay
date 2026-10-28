@@ -16,6 +16,11 @@ from pipeline import LivePipeline, PipelineOptions
 from transcription import RecognizedWord
 
 
+def _fake_factory(recognizer_type):
+    return lambda options, on_status, **ignored: recognizer_type(
+        options.model_size, options.device_mode, options.model_path, on_status=on_status)
+
+
 class _FakeCapture:
     sample_rate = 16_000
     block_size = 8_000
@@ -137,7 +142,7 @@ class PipelineReconfigurationTests(unittest.TestCase):
         _RecordingRecognizer.audio_sizes.clear()
 
         with patch.object(pipeline, "SystemAudioCapture", _BurstCapture), patch.object(
-            pipeline, "WhisperRecognizer", _RecordingRecognizer
+            pipeline, "_new_recognizer", _fake_factory(_RecordingRecognizer)
         ):
             runner = LivePipeline(
                 self._options(),
@@ -183,7 +188,7 @@ class PipelineReconfigurationTests(unittest.TestCase):
             reset_ready.set()
 
         with patch.object(pipeline, "SystemAudioCapture", _FakeCapture), patch.object(
-            pipeline, "WhisperRecognizer", _FakeRecognizer
+            pipeline, "_new_recognizer", _fake_factory(_FakeRecognizer)
         ), patch.object(pipeline, "TranslationService", _FakeTranslationService):
             runner = LivePipeline(
                 self._options(),
@@ -247,7 +252,7 @@ class PipelineReconfigurationTests(unittest.TestCase):
         errors = []
 
         with patch.object(pipeline, "SystemAudioCapture", _FakeCapture), patch.object(
-            pipeline, "WhisperRecognizer", _FakeRecognizer
+            pipeline, "_new_recognizer", _fake_factory(_FakeRecognizer)
         ):
             runner = LivePipeline(
                 self._options(device_mode="NVIDIA GPU（float16）"),
@@ -280,13 +285,14 @@ class PipelineReconfigurationTests(unittest.TestCase):
 
     def test_quality_options_apply_without_reloading_model(self):
         errors = []
+        statuses = []
 
         with patch.object(pipeline, "SystemAudioCapture", _FakeCapture), patch.object(
-            pipeline, "WhisperRecognizer", _FakeRecognizer
+            pipeline, "_new_recognizer", _fake_factory(_FakeRecognizer)
         ):
             runner = LivePipeline(
                 self._options(),
-                lambda _text: None,
+                statuses.append,
                 lambda *_args: None,
                 lambda *_args: None,
                 errors.append,
@@ -322,6 +328,7 @@ class PipelineReconfigurationTests(unittest.TestCase):
             _FakeRecognizer.instances[0].decode_options[-1]["temperature_schedule"],
             "0,0.2,0.4",
         )
+        self.assertTrue(any("设置已生效；搜索 5，窗口 8 秒，更新间隔 0.5 秒" in status for status in statuses))
         self.assertEqual(errors, [])
 
     def test_failed_model_change_waits_for_another_configuration(self):
@@ -336,7 +343,7 @@ class PipelineReconfigurationTests(unittest.TestCase):
                 super().load()
 
         with patch.object(pipeline, "SystemAudioCapture", _FakeCapture), patch.object(
-            pipeline, "WhisperRecognizer", _FailingRecognizer
+            pipeline, "_new_recognizer", _fake_factory(_FailingRecognizer)
         ):
             runner = LivePipeline(
                 self._options(),

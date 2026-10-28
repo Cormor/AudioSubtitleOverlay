@@ -5,6 +5,7 @@ LANGUAGES = {
     "英语": "en",
     "日语": "ja",
     "韩语": "ko",
+    "粤语": "yue",
     "法语": "fr",
     "西班牙语": "es",
     "德语": "de",
@@ -37,7 +38,7 @@ def source_language_names() -> list[str]:
 
 def target_language_names() -> list[str]:
     """返回目标语言下拉框顺序。"""
-    return [*PRIORITY_LANGUAGE_NAMES, *_other_language_names()]
+    return [name for name in [*PRIORITY_LANGUAGE_NAMES, *_other_language_names()] if name != "粤语"]
 
 
 def language_code(display_name: str, allow_auto: bool = True) -> str | None:

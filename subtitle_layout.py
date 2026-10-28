@@ -673,15 +673,40 @@ def fade_progress(elapsed_ms: float, duration_ms: float) -> float:
 
 
 class Motion1D:
-    """一维缓动动画：从当前值平滑逼近目标值。"""
+    """解析求解的一维阻尼弹簧；duration_ms 仅为旧调用保留。"""
 
-    def __init__(self, duration_ms: float, value: float = 0.0) -> None:
-        self.duration_ms = max(0.0, float(duration_ms))
-        self._value = float(value)
-        self._target = float(value)
-        self._start = float(value)
+    def __init__(
+        self,
+        duration_ms: float,
+        value: float = 0.0,
+        *,
+        mass: float = 1.0,
+        stiffness: float = 400.0,
+        dampingRatio: float = 1.0,
+    ) -> None:
+        self.duration_ms = self._finite(duration_ms, "duration_ms")
+        if self.duration_ms < 0:
+            raise ValueError("duration_ms must be non-negative")
+        self.mass = self._finite(mass, "mass")
+        self.stiffness = self._finite(stiffness, "stiffness")
+        self.dampingRatio = self._finite(dampingRatio, "dampingRatio")
+        if self.mass <= 0 or self.stiffness <= 0 or self.dampingRatio <= 0:
+            raise ValueError("mass/stiffness must be positive and dampingRatio positive")
+        self._value = self._finite(value, "value")
+        self._target = self._value
+        self._velocity = 0.0
         self._started_at = time.monotonic()
         self._running = False
+
+    @staticmethod
+    def _finite(value: float, name: str) -> float:
+        try:
+            result = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{name} must be finite") from exc
+        if not math.isfinite(result):
+            raise ValueError(f"{name} must be finite")
+        return result
 
     @property
     def value(self) -> float:
@@ -692,39 +717,82 @@ class Motion1D:
         return self._target
 
     @property
+    def velocity(self) -> float:
+        """当前速度（像素/秒），只读。"""
+        return self._velocity
+
+    @property
     def running(self) -> bool:
         return self._running
 
     def snap(self, value: float) -> None:
         """立即跳到目标值，不产生动画。"""
-        self._value = self._target = self._start = float(value)
+        value = self._finite(value, "value")
+        self._value = self._target = value
+        self._velocity = 0.0
+        self._started_at = time.monotonic()
         self._running = False
 
     def set_target(self, value: float, *, instant: bool = False) -> bool:
         """设置目标值；返回是否发生可见变化。"""
-        value = float(value)
+        value = self._finite(value, "value")
+        self.advance()
+        if instant:
+            changed = value != self._value or self._running
+            self.snap(value)
+            return changed
         if value == self._target and (self._running or value == self._value):
             return False
         self._target = value
-        if instant or self.duration_ms <= 0:
+        if abs(value - self._value) <= 0.1 and abs(self._velocity) <= 0.1:
             changed = value != self._value
             self.snap(value)
             return changed
-        self._start = self._value
         self._started_at = time.monotonic()
         self._running = True
         return True
 
     def advance(self, now: float | None = None) -> tuple[float, bool]:
         """推进到 now 时刻的值；返回 (当前值, 是否结束)。"""
+        now = time.monotonic() if now is None else self._finite(now, "now")
         if not self._running:
             return self._value, True
-        now = time.monotonic() if now is None else now
-        elapsed_ms = (now - self._started_at) * 1000.0
-        if elapsed_ms >= self.duration_ms or self._start == self._target:
+        elapsed = now - self._started_at
+        if elapsed <= 0:
+            return self._value, False
+        x0 = self._value - self._target
+        v0 = self._velocity
+        omega0 = math.sqrt(self.stiffness / self.mass)
+        alpha = self.dampingRatio * omega0
+        discriminant = alpha * alpha - omega0 * omega0
+        if discriminant < -1e-10:
+            wd = math.sqrt(-discriminant)
+            cosine, sine = math.cos(wd * elapsed), math.sin(wd * elapsed)
+            decay = math.exp(-alpha * elapsed)
+            b = (v0 + alpha * x0) / wd
+            displacement = decay * (x0 * cosine + b * sine)
+            velocity = decay * (
+                (v0) * cosine - ((alpha * v0 + omega0 * omega0 * x0) / wd) * sine
+            )
+        elif discriminant <= 1e-10:
+            decay = math.exp(-omega0 * elapsed)
+            b = v0 + omega0 * x0
+            displacement = decay * (x0 + b * elapsed)
+            velocity = decay * (v0 - omega0 * b * elapsed)
+        else:
+            root = math.sqrt(discriminant)
+            r1, r2 = -alpha + root, -alpha - root
+            c1 = (v0 - r2 * x0) / (r1 - r2)
+            c2 = x0 - c1
+            e1, e2 = math.exp(r1 * elapsed), math.exp(r2 * elapsed)
+            displacement = c1 * e1 + c2 * e2
+            velocity = c1 * r1 * e1 + c2 * r2 * e2
+        self._value = self._target + displacement
+        self._velocity = velocity
+        self._started_at = now
+        if abs(displacement) <= 0.1 and abs(velocity) <= 0.1:
             self._value = self._target
+            self._velocity = 0.0
             self._running = False
             return self._value, True
-        progress = ease_out_cubic(elapsed_ms / self.duration_ms)
-        self._value = self._start + (self._target - self._start) * progress
         return self._value, False

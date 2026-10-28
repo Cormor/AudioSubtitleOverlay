@@ -106,6 +106,7 @@ class WhisperRecognizer:
         self.actual_device = ""
         self.actual_compute_type = ""
         self._on_status = on_status or (lambda _text: None)
+        self.cancel_wait = None
 
     def load(self) -> None:
         """准备组件并加载本地模型。"""
@@ -120,9 +121,12 @@ class WhisperRecognizer:
                 model_source = ensure_model_available(
                     self.model_size,
                     on_progress=self._download_progress,
+                    **({"cancel_wait": self.cancel_wait} if self.cancel_wait is not None else {}),
                 )
         if self.device_mode == "CPU（int8）":
             candidates = [("cpu", "int8")]
+        elif self.device_mode == "NVIDIA GPU（int8_float16）":
+            candidates = [("cuda", "int8_float16")]
         elif self.device_mode == "NVIDIA GPU（float16）":
             candidates = [("cuda", "float16")]
         else:
@@ -130,7 +134,7 @@ class WhisperRecognizer:
 
         if candidates and candidates[0][0] == "cuda":
             if not nvidia_driver_available():
-                if self.device_mode == "NVIDIA GPU（float16）":
+                if self.device_mode in {"NVIDIA GPU（float16）", "NVIDIA GPU（int8_float16）"}:
                     raise RuntimeError("未检测到NVIDIA显卡驱动，无法使用GPU识别。")
                 candidates = [("cpu", "int8")]
             else:
@@ -139,11 +143,15 @@ class WhisperRecognizer:
                         self._on_status("正在使用本机NVIDIA GPU运行库……")
                     else:
                         self._on_status("正在准备NVIDIA GPU运行库……")
-                        prepare_component("runtime.cuda12", on_progress=self._download_progress)
+                        prepare_component("runtime.cuda12", on_progress=self._download_progress,
+                                          **({"cancel_wait": self.cancel_wait} if self.cancel_wait is not None else {}))
                         if not gpu_runtime_available(refresh=True):
                             raise RuntimeError("已准备的NVIDIA运行库无法加载。")
                 except Exception as error:
-                    if self.device_mode == "NVIDIA GPU（float16）":
+                    from download_manager import DownloadWaitCancelled
+                    if isinstance(error, DownloadWaitCancelled):
+                        raise
+                    if self.device_mode in {"NVIDIA GPU（float16）", "NVIDIA GPU（int8_float16）"}:
                         raise RuntimeError(f"GPU运行库准备失败：{error}") from error
                     logging.warning("GPU运行库准备失败，自动模式回退CPU：%s", error)
                     candidates = [("cpu", "int8")]
@@ -159,6 +167,8 @@ class WhisperRecognizer:
                     device=device,
                     compute_type=compute_type,
                     local_files_only=True,
+                    cpu_threads=2,
+                    num_workers=1,
                 )
                 if device == "cuda":
                     # 先完成首次 GPU 推理初始化；初始化失败仍按既有自动模式尝试 CPU。
@@ -195,6 +205,10 @@ class WhisperRecognizer:
     def loaded(self) -> bool:
         """返回模型是否已加载。"""
         return self._model is not None
+
+    def close(self) -> None:
+        """在推理线程结束后释放模型引用。"""
+        self._model = None
 
     def transcribe(
         self,
@@ -244,6 +258,11 @@ class WhisperRecognizer:
             no_repeat_ngram_size=no_repeat_ngram_size,
             no_speech_threshold=no_speech_threshold,
         )
+        signature=repr(transcribe_options)
+        if signature!=getattr(self,"_logged_decode_parameters",None):
+            logging.info("解码调用参数：模型=%s，设备=%s/%s，参数=%s",
+                         self.model_size,self.actual_device,self.actual_compute_type,transcribe_options)
+            self._logged_decode_parameters=signature
         segments, info = self._model.transcribe(
             audio,
             language=language,

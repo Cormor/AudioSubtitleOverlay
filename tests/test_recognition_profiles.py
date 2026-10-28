@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 from main import Application, _TEMPERATURE_LABELS
 from recognition_profiles import PROFILES, profile_values
+from pipeline import PipelineOptions
 from settings import Settings, RECOGNITION_NUMERIC_OPTIONS
 
 
@@ -18,46 +19,94 @@ class RecognitionProfileTests(unittest.TestCase):
         app._test_interpreter = interpreter
         def variable(value):
             return tk.StringVar(master=interpreter, value=value)
-        app.profile_var = variable("均衡 · small")
-        app.profile_model_var = tk.BooleanVar(master=interpreter, value=True)
         app.model_var = variable("tiny")
         app.model_path_var = variable("custom-model")
         app.beam_size_var = variable("1")
         app.context_var = variable("启用")
         app.temperature_var = variable(_TEMPERATURE_LABELS["0"])
         app.current_profile_var = variable("")
+        app.profile_hint_var = variable("")
+        app.pipeline = None
+        app._closing = False
+        app._live_update_after_id = None
+        app._test_scheduled = {}
+        def after(_delay, callback):
+            handle = len(app._test_scheduled) + 1
+            app._test_scheduled[handle] = callback
+            return handle
+        app.root = SimpleNamespace(after=after, after_cancel=lambda handle: app._test_scheduled.pop(handle, None))
         settings = Settings()
         app.recognition_vars = {name: variable(str(getattr(settings,"recognition_"+name)))
                                 for name in RECOGNITION_NUMERIC_OPTIONS}
         app._save_settings = Mock()
-        app._queue_live_configuration = Mock()
         app._set_status = Mock()
         return app
 
-    def test_apply_can_keep_custom_model_while_updating_decoder_parameters(self):
+    def test_each_preset_preserves_model_custom_path_and_device(self):
         app = self.application()
-        app.profile_model_var.set(False)
-        app._apply_recognition_profile()
-        self.assertEqual(app.model_path_var.get(),"custom-model")
-        self.assertEqual(app.model_var.get(),"tiny")
-        self.assertEqual(app.beam_size_var.get(),"3")
-        self.assertEqual(app.context_var.get(),"关闭")
-        self.assertIn("自定义",app.current_profile_var.get())
-        app._queue_live_configuration.assert_called_once()
-
-    def test_apply_full_combination_and_manual_change_does_not_reapply_it(self):
-        app = self.application()
+        app.device_var = tk.StringVar(master=app._test_interpreter, value="CPU（int8）")
         for name in PROFILES:
-            app.profile_var.set(name)
-            app._apply_recognition_profile()
-            self.assertEqual(app.model_var.get(),profile_values(name)["model"])
-            self.assertEqual(app.model_path_var.get(),"")
-            self.assertIn(name,app.current_profile_var.get())
-        app.beam_size_var.set("1")
+            app._apply_recognition_profile(name)
+            self.assertEqual(app.model_path_var.get(), "custom-model")
+            self.assertEqual(app.model_var.get(), "tiny")
+            self.assertEqual(app.device_var.get(), "CPU（int8）")
+            self.assertIn(name, app.current_profile_var.get())
+            values = profile_values(name)
+            for key, variable in app.recognition_vars.items():
+                self.assertEqual(float(variable.get()), values[key])
+            self.assertNotIn("model", values)
+
+    def test_changing_model_preserves_preset_and_manual_tuning_stays_custom(self):
+        app = self.application()
+        app._apply_recognition_profile("均衡")
+        before = {key: variable.get() for key, variable in app.recognition_vars.items()}
+        app.model_var.set("large-v3")
+        app.model_path_var.set("different-model")
         app._update_current_profile()
-        self.assertIn("自定义",app.current_profile_var.get())
-        self.assertEqual(app.model_var.get(),"large-v3")
-        self.assertEqual(app.beam_size_var.get(),"1")
+        self.assertIn("均衡", app.current_profile_var.get())
+        self.assertEqual(before, {key: variable.get() for key, variable in app.recognition_vars.items()})
+        app.beam_size_var.set("5")
+        app._update_current_profile()
+        self.assertIn("自定义", app.current_profile_var.get())
+        self.assertEqual(app.model_var.get(), "large-v3")
+        self.assertEqual(app.beam_size_var.get(), "5")
+
+    def test_preset_traces_publish_only_one_complete_configuration(self):
+        app = self.application()
+        published = []
+        def options_from_ui():
+            return PipelineOptions(
+                source_language="en", target_language="zh", model_size=app.model_var.get(),
+                device_mode="CPU（int8）", model_path=app.model_path_var.get(),
+                audio_device="test-audio", translation_backend="仅使用本地翻译",
+                beam_size=int(app.beam_size_var.get()),
+                condition_on_previous_text=app.context_var.get() == "启用",
+                temperature_schedule=next(value for value, label in _TEMPERATURE_LABELS.items()
+                                          if label == app.temperature_var.get()),
+                **{key: type(choices[0])(app.recognition_vars[key].get())
+                   for key, choices in RECOGNITION_NUMERIC_OPTIONS.items()},
+            )
+        app.pipeline = SimpleNamespace(options=options_from_ui(),
+                                       update_options=lambda options: published.append(options) or True)
+        app._controller = SimpleNamespace(update_options=app.pipeline.update_options)
+        app._pipeline_options_from_ui = options_from_ui
+        for variable in (app.beam_size_var, app.context_var, app.temperature_var, *app.recognition_vars.values()):
+            variable.trace_add("write", app._queue_live_configuration)
+            variable.trace_add("write", app._schedule_settings_save)
+        app._apply_recognition_profile("长上下文")
+        self.assertEqual(len(app._test_scheduled), 1)
+        self.assertFalse(published)
+        app._test_scheduled.popitem()[1]()
+        self.assertEqual(len(published), 1)
+        self.assertIsInstance(published[0], PipelineOptions)
+        self.assertEqual(published[0].beam_size, 5)
+        self.assertTrue(published[0].condition_on_previous_text)
+        self.assertEqual(published[0].window_seconds, 16)
+        self.assertEqual(published[0].source_language, app.pipeline.options.source_language)
+        self.assertEqual(published[0].target_language, app.pipeline.options.target_language)
+        for key in RECOGNITION_NUMERIC_OPTIONS:
+            self.assertEqual(getattr(published[0], key), profile_values("长上下文")[key])
+        app._save_settings.assert_called_once()
 
     def test_numeric_options_roundtrip_and_invalid_values_fall_back(self):
         with tempfile.TemporaryDirectory() as temporary, patch("settings.application_data_dir", return_value=Path(temporary)):

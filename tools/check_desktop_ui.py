@@ -1,6 +1,7 @@
 """Isolated Windows desktop check; no audio capture or user configuration writes."""
 
 import ctypes
+import argparse
 from ctypes import wintypes
 import json
 import os
@@ -20,9 +21,11 @@ def main():
     from main import Application
     from overlay import OverlayWindow
 
-    evidence = ROOT / "verification_desktop"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", type=Path, default=ROOT / "verification_desktop")
+    evidence = parser.parse_args().output
     evidence.mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="shengmu-ui-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="shengmu-ui-", dir=evidence) as temporary:
         os.environ["APPDATA"] = temporary
         root = tk.Tk()
         root.withdraw()
@@ -63,10 +66,22 @@ def main():
             box = (bounds.left,bounds.top,bounds.right,bounds.bottom)
             ImageGrab.grab(window=frame).save(evidence / "recognition.png")
             notebook = next(w for w in root.winfo_children()[0].winfo_children() if w.winfo_class()=="TNotebook")
-            for index, title in [(1,"appearance"),(2,"advanced")]:
+            results["five_task_pages"] = len(notebook.tabs()) == 5
+            for index, title in [(1,"appearance"),(2,"models"),(3,"advanced"),(4,"help")]:
                 notebook.select(index)
                 pump(.15)
                 ImageGrab.grab(window=frame).save(evidence / f"{title}.png")
+            notebook.select(0)
+            app.theme_label_var.set("深色黑金")
+            app._on_theme_selected()
+            pump(.2)
+            results["dark_theme_applied"] = app._palette["theme"] == "dark"
+            ImageGrab.grab(window=frame).save(evidence / "dark.png")
+            app.theme_label_var.set("浅色白金")
+            app._on_theme_selected()
+            pump(.2)
+            results["light_theme_applied"] = app._palette["theme"] == "light"
+            ImageGrab.grab(window=frame).save(evidence / "light.png")
             root.iconify()
             pump(.3)
             results["minimize_to_tray"] = root.state() == "withdrawn"

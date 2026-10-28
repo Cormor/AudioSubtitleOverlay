@@ -3,9 +3,32 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Literal
+from typing import Iterable, Literal, TYPE_CHECKING
 
 from text_processing import display_text
+from subtitle_events import source_text_extends
+
+if TYPE_CHECKING:
+    from subtitle_events import SourceUpdate, TranslationContext, TranslationUpdate
+
+
+@dataclass(frozen=True)
+class SourceVersion:
+    """译文所依据的完整源文快照；序号始终保留请求时的值。"""
+
+    sequence: int
+    block_id: int
+    text: str
+    language: str | None
+    pipeline_id: str = ""
+    session_id: int = 0
+    source_id: str = "audio"
+    revision: int = 0
+    final: bool = True
+
+    @property
+    def scope(self):
+        return self.pipeline_id, self.session_id, self.source_id, self.block_id
 
 
 @dataclass
@@ -15,12 +38,24 @@ class SubtitleBlock:
     translation: str = ""
     language: str | None = None
     translation_sequence: int = -1
+    final: bool = True
+    version: SourceVersion | None = None
+    lineage_start_sequence: int = 0
+    translation_version: SourceVersion | None = None
+
+    @property
+    def translation_state(self):
+        if not self.translation or self.translation_version is None:
+            return "waiting"
+        translated = self.translation_version
+        if translated.text != self.source or (self.final and not translated.final):
+            return "updating"
+        return "final" if self.final and translated.final else "draft"
 
 
 class SubtitleHistory:
-    """保留稳定字幕并管理当前段的即时草稿。"""
+    """保留最近字幕，当前段草稿和定稿沿用同一身份。"""
 
-    # 浮窗用于短时回看，不作为完整会话存档。
     max_blocks = 64
 
     def __init__(self):
@@ -29,130 +64,154 @@ class SubtitleHistory:
         self._preview_block_id: int | None = None
         self._preview_sequence = -1
         self._preview_source = ""
-        self._pending_translations = {}
+        self._pending_translations: dict[int, tuple[str, SourceVersion | None]] = {}
+        self._latest_seen_sequence = -1
 
     def clear(self):
         self.blocks.clear()
         self._sequence_blocks.clear()
         self.clear_preview()
         self._pending_translations.clear()
+        self._latest_seen_sequence = -1
 
     def clear_preview(self):
-        """清除尚未经过质量通道确认的当前段草稿。"""
         self._preview_block_id = None
         self._preview_sequence = -1
         self._preview_source = ""
 
-    def update_source(self, block_id, sequence, text, language):
+    def clear_translations(self):
+        for block in self.blocks.values():
+            block.translation = ""
+            block.translation_sequence = -1
+            block.translation_version = None
+        self._pending_translations.clear()
+
+    def update_source(self, block_id, sequence, text, language, *, version=None, final=True):
+        version = version or SourceVersion(sequence, block_id, text, language, final=final)
         previous = self.blocks.get(block_id)
         if previous and sequence < previous.sequence:
             return False
+        if previous and sequence == previous.sequence and (
+            previous.source != text or previous.language != language
+            or previous.version.scope != version.scope
+            or (previous.final and not final)
+        ):
+            return False
+        append = bool(previous and previous.version.scope == version.scope
+                      and previous.language == language
+                      and source_text_extends(previous.source, text, previous_final=previous.final))
+        cutoff = previous.lineage_start_sequence if append else sequence
         if previous:
             self._sequence_blocks.pop(previous.sequence, None)
-        pending_translation = self._pending_translations.pop(sequence, None)
-        if pending_translation is not None:
-            # 同一段发生质量修订时，新序号的译文优先于旧版本译文。
-            translation = pending_translation
-        else:
-            translation = previous.translation if previous and text.startswith(previous.source) else ""
-        translation_sequence = sequence if pending_translation is not None or (previous and previous.source == text and translation) else (previous.translation_sequence if previous and translation else -1)
-        self.blocks[block_id] = SubtitleBlock(sequence, text, translation, language, translation_sequence)
+        if not append:
+            # 改写后即便又回到旧前缀，旧请求仍低于本次修订的起点。
+            self._pending_translations = {
+                seq: item for seq, item in self._pending_translations.items()
+                if item[1] is None or item[1].block_id != block_id or seq >= cutoff
+            }
+        block = SubtitleBlock(
+            sequence, text,
+            previous.translation if append else "", language,
+            previous.translation_sequence if append else -1,
+            final, version, cutoff,
+            previous.translation_version if append else None,
+        )
+        self.blocks[block_id] = block
         self._sequence_blocks[sequence] = block_id
-        while len(self.blocks) > self.max_blocks:
-            oldest = next(iter(self.blocks))
-            removed = self.blocks.pop(oldest)
-            self._sequence_blocks.pop(removed.sequence, None)
+        self._latest_seen_sequence = max(self._latest_seen_sequence, sequence)
+        for pending_sequence, pending in sorted(list(self._pending_translations.items())):
+            translated, translated_version = pending
+            if pending_sequence == sequence or (
+                translated_version is not None and translated_version.block_id == block_id
+                and pending_sequence <= sequence
+            ):
+                self._pending_translations.pop(pending_sequence, None)
+                self.update_translation(pending_sequence, translated, version=translated_version or version)
         self._pending_translations = {
-            seq: value for seq, value in self._pending_translations.items()
-            if seq > sequence
+            seq: item for seq, item in self._pending_translations.items() if seq > self._latest_seen_sequence
         }
-        # 质量版本覆盖同段草稿，不保留未经确认的旧尾部。
-        if self._preview_block_id is not None and block_id >= self._preview_block_id:
-            self.clear_preview()
+        while len(self.blocks) > self.max_blocks:
+            removed_id = next(iter(self.blocks))
+            removed = self.blocks.pop(removed_id)
+            self._sequence_blocks.pop(removed.sequence, None)
+            if self._preview_block_id == removed_id:
+                self.clear_preview()
+        if final:
+            if self._preview_block_id is not None and block_id >= self._preview_block_id:
+                self.clear_preview()
+        else:
+            self._preview_block_id = block_id
+            self._preview_sequence = sequence
+            self._preview_source = text
         return True
 
-    def update_preview(self, block_id, sequence, text, language):
-        """接收完整段落草稿，以新版本替换旧版本。"""
-        if sequence < self._preview_sequence:
-            return False
-        # 预览接口接收完整段落版本，不把无时间范围的短文本拼接成正文。
+    def update_preview(self, block_id, sequence, text, language, *, version=None):
         candidate = text.strip(" \t")
         if not candidate:
             return False
-        unchanged = (
-            self._preview_block_id == block_id
-            and self._preview_source == candidate
-        )
-        self._preview_block_id = block_id
-        self._preview_sequence = sequence
-        self._preview_source = candidate
-        return bool(self._preview_source) and not unchanged
+        return self.update_source(block_id, sequence, candidate, language, version=version, final=False)
 
-    def update_translation(self, sequence, text):
-        block_id = self._sequence_blocks.get(sequence)
-        if block_id is None:
-            # 翻译线程可能先于界面线程的原文事件完成，先暂存，避免译文丢失。
-            latest = max(self._sequence_blocks, default=-1)
-            if sequence > latest:
-                self._pending_translations[sequence] = text
-                if len(self._pending_translations) > self.max_blocks:
+    def update_translation(self, sequence, text, *, version=None):
+        if version is None:
+            block_id = self._sequence_blocks.get(sequence)
+            block = self.blocks.get(block_id)
+            version = block.version if block is not None else None
+        else:
+            block = self.blocks.get(version.block_id)
+        if block is None or sequence > block.sequence:
+            if sequence > self._latest_seen_sequence:
+                self._pending_translations[sequence] = (text, version)
+                while len(self._pending_translations) > self.max_blocks:
                     self._pending_translations.pop(min(self._pending_translations))
             return False
-        block = self.blocks[block_id]
-        if block.translation == text and block.translation_sequence == sequence:
+        current = block.version
+        if (version is None or current is None or version.scope != current.scope
+            or version.language != block.language
+            or not block.lineage_start_sequence <= sequence <= block.sequence
+            or version.revision > current.revision
+            or not version.text or not source_text_extends(version.text, block.source, previous_final=version.final)
+            or (sequence == block.sequence and (
+                version.text != block.source or version.revision != current.revision
+                or version.final != block.final))
+            or sequence < block.translation_sequence):
+            return False
+        if block.translation == text and block.translation_version == version:
             return False
         block.translation = text
         block.translation_sequence = sequence
+        block.translation_version = version
         return True
 
     def entries(self):
-        result = []
-        for block_id, block in self.blocks.items():
-            if block_id == self._preview_block_id:
-                # 草稿对应的稳定翻译可能已经过时，质量结果到达前不显示旧译文。
-                result.append((self._preview_source, ""))
-            else:
-                result.append((block.source, block.translation))
-        if self._preview_block_id is not None and self._preview_block_id not in self.blocks:
-            result.append((self._preview_source, ""))
-        return result
+        return [(block.source, block.translation) for block in self.blocks.values()]
 
     def entry_modes(self):
-        """返回与 entries 对齐的正文状态，供渲染层区分稳定结果和草稿。"""
-        result = []
-        for block_id in self.blocks:
-            result.append("preview" if block_id == self._preview_block_id else "stable")
-        if self._preview_block_id is not None and self._preview_block_id not in self.blocks:
-            result.append("preview")
-        return result
+        return ["stable" if block.final else "preview" for block in self.blocks.values()]
+
+    def entry_translation_states(self):
+        return [block.translation_state for block in self.blocks.values()]
 
     def entry_translation_pending(self):
-        result = [bool(block.translation and block.translation_sequence != block.sequence)
-                  for block in self.blocks.values()]
-        if self._preview_block_id is not None and self._preview_block_id not in self.blocks:
-            result.append(False)
-        return result
+        return [block.translation_state == "updating" for block in self.blocks.values()]
 
     def latest_source(self) -> str:
-        """返回当前应显示的最新原文。"""
-        if self._preview_block_id is not None:
-            return self._preview_source
-        if not self.blocks:
-            return ""
-        return next(reversed(self.blocks.values())).source
+        return next(reversed(self.blocks.values())).source if self.blocks else ""
+
+    def latest_translation(self) -> str:
+        return next(reversed(self.blocks.values())).translation if self.blocks else ""
+
+    def latest_translation_state(self) -> str:
+        return next(reversed(self.blocks.values())).translation_state if self.blocks else "waiting"
 
     def translation_for_sequence(self, sequence: int) -> str:
-        """返回指定识别序号已经挂接的译文。"""
         block_id = self._sequence_blocks.get(sequence)
-        if block_id is None:
-            return ""
-        block = self.blocks[block_id]
-        return block.translation if block.translation_sequence == sequence else ""
+        block = self.blocks.get(block_id)
+        return block.translation if block and block.translation_sequence == sequence else ""
 
 
 @dataclass(frozen=True)
 class DisplayEvent:
-    """识别或翻译层提交给显示模块的统一事件。"""
+    """保留旧验证入口；正式流水线使用携带完整身份的事件。"""
 
     kind: Literal["source", "preview", "translation"]
     sequence: int
@@ -163,8 +222,6 @@ class DisplayEvent:
 
 @dataclass(frozen=True)
 class DisplaySnapshot:
-    """一次 UI 刷新所需的完整、不可变显示数据。"""
-
     entries: tuple[tuple[str, str], ...]
     revision_modes: tuple[str, ...]
     latest_source: str
@@ -175,10 +232,12 @@ class DisplaySnapshot:
     translation_visible: bool
     translation_pending: tuple[bool, ...] = ()
     translation_activity: int = 0
+    translation_states: tuple[str, ...] = ()
+    latest_translation_state: str = "waiting"
 
 
 class DisplayModule:
-    """接收原文、即时预览和翻译结果，输出批量显示快照。"""
+    """串行接收源文/译文事件，输出有界、完整的显示快照。"""
 
     def __init__(self, source_language: str | None, target_language: str, translation_enabled: bool = True) -> None:
         self.history = SubtitleHistory()
@@ -191,54 +250,64 @@ class DisplayModule:
         self._latest_source_text = ""
         self._latest_translation = ""
         self._latest_translation_sequence = -1
+        self._context = None
+        self._awaiting_context = False
         self._dirty = True
         self._snapshot: DisplaySnapshot | None = None
 
     @property
     def latest_source_text(self) -> str:
-        """返回当前原文标签需要显示的文字，不生成完整快照。"""
         return self._latest_source_text
 
     @property
     def latest_translation_text(self) -> str:
-        """返回当前译文标签需要显示的文字，不生成完整快照。"""
         return self._latest_translation
 
     @property
     def translation_visible(self) -> bool:
-        """返回当前语言设置下是否显示译文。"""
         return self._translation_visible()
+
+    @property
+    def translation_epoch(self) -> int:
+        return self._context.translation_epoch if self._context is not None else 0
 
     @staticmethod
     def _normalize_text(text: str, language: str | None) -> str:
-        """只做显示层规范化，保留内部段落、换行和标点。"""
         normalized = str(text).replace("\r\n", "\n").replace("\r", "\n")
         return display_text(normalized, language).strip(" \t")
 
     def _translation_visible(self) -> bool:
-        # 自动检测会在混合语言和短音频中反复变化，不随单次检测拆掉译文区。
         return self._translation_enabled and (self._source_language is None or self._source_language != self._target_language)
 
-    def set_translation_enabled(self, enabled: bool) -> bool:
-        if self._translation_enabled == enabled:
-            return False
-        self._translation_enabled = enabled
-        if not enabled:
-            for block in self.history.blocks.values():
-                block.translation = ""
-                block.translation_sequence = -1
-            self.history._pending_translations.clear()
-            self._latest_translation = ""
-            self._latest_translation_sequence = -1
-        self._mark_dirty()
-        return True
+    @property
+    def awaiting_translation_context(self) -> bool:
+        return self._awaiting_context
 
     def _mark_dirty(self) -> None:
         self._dirty = True
         self._snapshot = None
 
+    def _sync_latest(self):
+        self._latest_source_text = self.history.latest_source()
+        self._latest_translation = self.history.latest_translation()
+        latest = next(reversed(self.history.blocks.values()), None)
+        self._latest_translation_sequence = latest.translation_sequence if latest else -1
+
+    def invalidate_translation_context(self) -> None:
+        """界面已提交新配置时立即屏蔽旧配置排队结果。"""
+        self._awaiting_context = self._context is not None
+        self.history.clear_translations()
+        self._sync_latest()
+        self._mark_dirty()
+
+    def set_translation_enabled(self, enabled: bool) -> bool:
+        if self._translation_enabled == enabled:
+            return False
+        self._translation_enabled = enabled
+        self.invalidate_translation_context()
+        return True
+
     def reset(self, source_language: str | None, target_language: str) -> None:
-        """开始新会话并清空旧显示状态。"""
         self.history.clear()
         self._source_language = source_language
         self._target_language = target_language
@@ -247,158 +316,138 @@ class DisplayModule:
         self._latest_source_text = ""
         self._latest_translation = ""
         self._latest_translation_sequence = -1
+        self._context = None
+        self._awaiting_context = False
+        self._translation_activity = 0
         self._mark_dirty()
 
     def set_languages(self, source_language: str | None, target_language: str) -> bool:
-        """更新显示语言设置，不触碰既有字幕历史。"""
-        changed = (
-            self._source_language != source_language
-            or self._target_language != target_language
-            or self._detected_language is not None
-        )
+        if self._source_language == source_language and self._target_language == target_language:
+            return False
         self._source_language = source_language
         self._target_language = target_language
-        # 语言选择变化后，自动检测结果必须重新等待当前会话的下一条结果。
         self._detected_language = None
-        if changed:
-            self._mark_dirty()
-        return changed
+        self.invalidate_translation_context()
+        return True
+
+    def apply_translation_context(self, context: TranslationContext) -> bool:
+        if (context.source_language != self._source_language
+            or context.target_language != self._target_language
+            or context.enabled != self._translation_enabled):
+            return False
+        previous = self._context
+        if previous is not None:
+            if context.pipeline_id != previous.pipeline_id or context.session_id < previous.session_id:
+                return False
+            if context.session_id == previous.session_id and context.translation_epoch < previous.translation_epoch:
+                return False
+            if context == previous:
+                return False
+            if context.session_id != previous.session_id:
+                self.history.clear()
+                self._latest_source_sequence = 0
+                self._detected_language = None
+        self._context = context
+        self._awaiting_context = False
+        self.history.clear_translations()
+        self._sync_latest()
+        self._mark_dirty()
+        return True
+
+    def _matches_context(self, update, *, translation=False):
+        context = self._context
+        return bool(context is not None and (not translation or not self._awaiting_context)
+                    and update.pipeline_id == context.pipeline_id
+                    and update.session_id == context.session_id
+                    and update.translation_epoch == context.translation_epoch)
+
+    def apply_update(self, update: SourceUpdate) -> bool:
+        if not self._matches_context(update):
+            return False
+        text = self._normalize_text(update.text, update.language)
+        version = SourceVersion(update.sequence, update.block_id, text, update.language,
+                                update.pipeline_id, update.session_id, update.source_id,
+                                update.revision, update.final)
+        return self._apply_source_version(version)
+
+    def apply_translation_update(self, update: TranslationUpdate) -> bool:
+        if (not self._matches_context(update, translation=True) or not self._translation_visible()
+            or update.target_language != self._target_language):
+            return False
+        version = SourceVersion(update.sequence, update.block_id,
+                                self._normalize_text(update.source_text, update.source_language),
+                                update.source_language, update.pipeline_id, update.session_id,
+                                update.source_id, update.revision, update.final)
+        return self._apply_translation_version(update.sequence, update.text, update.target_language, version)
 
     def apply(self, event: DisplayEvent) -> bool:
-        """按事件类型执行后处理；返回是否需要新的显示快照。"""
         if event.kind == "source":
-            return self.apply_source(
-                event.sequence,
-                event.text,
-                event.language,
-                event.block_id,
-            )
+            return self.apply_source(event.sequence, event.text, event.language, event.block_id)
         if event.kind == "preview":
-            if event.block_id is None:
-                return False
-            return self.apply_preview(
-                event.sequence,
-                event.text,
-                event.language,
-                event.block_id,
-            )
+            return event.block_id is not None and self.apply_preview(event.sequence, event.text, event.language, event.block_id)
         if event.kind == "translation":
             return self.apply_translation(event.sequence, event.text, event.language)
         raise ValueError(f"未知显示事件类型：{event.kind}")
 
     def apply_many(self, events: Iterable[DisplayEvent]) -> bool:
-        """批量处理事件，只在调用方取快照时生成一次完整显示数据。"""
         changed = False
         for event in events:
             changed = self.apply(event) or changed
         return changed
 
-    def apply_source(
-        self,
-        sequence: int,
-        text: str,
-        language: str | None,
-        block_id: int | None = None,
-    ) -> bool:
-        """接收质量通道原文。"""
-        if sequence < self._latest_source_sequence:
+    def _apply_source_version(self, version):
+        if version.sequence < self._latest_source_sequence or not version.text:
             return False
-        normalized = self._normalize_text(text, language)
-        if not normalized:
+        changed = self.history.update_source(version.block_id, version.sequence, version.text,
+                                             version.language, version=version, final=version.final)
+        if not changed:
             return False
-        self._latest_source_sequence = sequence
-        language_changed = self._detected_language != language
-        self._detected_language = language
-        history_changed = self.history.update_source(
-            block_id if block_id is not None else sequence,
-            sequence,
-            normalized,
-            language,
-        )
-        attached_translation = self.history.translation_for_sequence(sequence)
-        translation_changed = False
-        if (
-            attached_translation
-            and sequence >= self._latest_translation_sequence
-            and attached_translation != self._latest_translation
-        ):
-            self._latest_translation = attached_translation
-            self._latest_translation_sequence = sequence
-            translation_changed = True
-        if not attached_translation and self._latest_translation:
-            self._latest_translation = ""
-            translation_changed = True
-        self._latest_source_text = self.history.latest_source()
-        if history_changed or language_changed or translation_changed:
-            self._mark_dirty()
-        return history_changed or language_changed or translation_changed
+        self._latest_source_sequence = version.sequence
+        self._detected_language = version.language
+        self._sync_latest()
+        self._mark_dirty()
+        return True
 
-    def apply_preview(
-        self,
-        sequence: int,
-        text: str,
-        language: str | None,
-        block_id: int,
-    ) -> bool:
-        """接收短窗口即时预览。"""
-        if sequence < self._latest_source_sequence:
+    def apply_source(self, sequence, text, language, block_id=None) -> bool:
+        if self._context is not None:
             return False
-        normalized = self._normalize_text(text, language)
-        if not normalized:
-            return False
-        self._latest_source_sequence = sequence
-        language_changed = bool(language and self._detected_language is None)
-        if language_changed:
-            self._detected_language = language
-        history_changed = self.history.update_preview(
-            block_id,
-            sequence,
-            normalized,
-            language,
-        )
-        self._latest_source_text = self.history.latest_source()
-        if history_changed or language_changed:
-            self._mark_dirty()
-        return history_changed or language_changed
+        return self._apply_source_version(SourceVersion(sequence, block_id if block_id is not None else sequence,
+                                                        self._normalize_text(text, language), language))
 
-    def apply_translation(
-        self,
-        sequence: int,
-        text: str,
-        language: str | None,
-    ) -> bool:
-        """接收翻译线程的结果；目标语言不匹配的结果直接丢弃。"""
+    def apply_preview(self, sequence, text, language, block_id) -> bool:
+        if self._context is not None:
+            return False
+        return self._apply_source_version(SourceVersion(sequence, block_id, self._normalize_text(text, language),
+                                                        language, final=False))
+
+    def _apply_translation_version(self, sequence, text, language, version=None):
         if not self._translation_visible() or language != self._target_language:
             return False
         normalized = self._normalize_text(text, language)
         if not normalized:
             return False
         pending_before = self.history._pending_translations.get(sequence)
-        history_changed = self.history.update_translation(sequence, normalized)
-        pending_output = (self.history._pending_translations.get(sequence) == normalized
-                          and pending_before != normalized)
-        latest_changed = False
-        if (
-            history_changed
-            and sequence >= self._latest_source_sequence
-            and sequence >= self._latest_translation_sequence
-            and normalized != self._latest_translation
-        ):
-            self._latest_translation = normalized
-            self._latest_translation_sequence = sequence
-            latest_changed = True
-        if history_changed or latest_changed or pending_output:
+        changed = self.history.update_translation(sequence, normalized, version=version)
+        pending_after = self.history._pending_translations.get(sequence)
+        new_pending = pending_after is not None and pending_after != pending_before
+        if changed or new_pending:
             self._translation_activity += 1
+            self._sync_latest()
             self._mark_dirty()
-        return history_changed or latest_changed
+        return changed
+
+    def apply_translation(self, sequence, text, language) -> bool:
+        if self._context is not None:
+            return False
+        return self._apply_translation_version(sequence, text, language)
 
     def snapshot(self) -> DisplaySnapshot:
-        """生成当前完整显示快照，不包含任何 UI 对象。"""
-        entries = tuple(self.history.entries())
         return DisplaySnapshot(
-            entries=entries,
+            entries=tuple(self.history.entries()),
             revision_modes=tuple(self.history.entry_modes()),
             translation_pending=tuple(self.history.entry_translation_pending()),
+            translation_states=tuple(self.history.entry_translation_states()),
+            latest_translation_state=self.history.latest_translation_state(),
             latest_source=self._latest_source_text,
             latest_translation=self._latest_translation,
             source_language=self._source_language,
@@ -409,7 +458,6 @@ class DisplayModule:
         )
 
     def take_snapshot(self) -> DisplaySnapshot | None:
-        """只在状态改变后取出一次快照，供 UI 批量提交。"""
         if not self._dirty:
             return None
         if self._snapshot is None:

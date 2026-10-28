@@ -10,9 +10,9 @@ import re
 import threading
 import time
 from typing import Callable
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
-from download_manager import ComponentFile, ComponentSpec, DownloadProgress, DownloadManager
+from download_manager import ComponentFile, ComponentSpec, DownloadProgress, DownloadManager, urlopen
 from settings import application_data_dir
 
 
@@ -246,6 +246,15 @@ def _model_package_pairs(from_code: str, to_code: str) -> list[tuple[str, str, T
     raise RuntimeError(f"本地翻译暂不提供 {from_code}->{to_code} 语言模型。")
 
 
+def translation_language(code: str | None) -> str | None:
+    """Use the Chinese text model for Cantonese ASR output.
+
+    The ASR event retains yue. This is a written-text model approximation,
+    not a claim that the Chinese model has Cantonese-specific training.
+    """
+    return "zh" if code == "yue" else code
+
+
 class ArgosTranslator:
     """使用 Argos 模型包和 CTranslate2 执行本地翻译。"""
 
@@ -254,6 +263,11 @@ class ArgosTranslator:
         self._last_progress_at = 0.0
 
     def translate(self, text: str, source_language: str, target_language: str) -> str:
+        source_language = translation_language(source_language)
+        target_language = translation_language(target_language)
+        if source_language == "zh":
+            from text_processing import display_text
+            text = display_text(text, "zh")
         if source_language == target_language:
             return text
         try:
@@ -385,6 +399,8 @@ class MyMemoryTranslator:
     _cooldown_until = 0.0
 
     def translate(self, text: str, source_language: str, target_language: str) -> str:
+        source_language = translation_language(source_language)
+        target_language = translation_language(target_language)
         if source_language == target_language:
             return text
         if not source_language:
@@ -486,6 +502,10 @@ class MyMemoryTranslator:
 
 def _local_models_ready(source_language: str, target_language: str) -> bool:
     """仅检查已安装目录，不访问网络、不触发清单下载。"""
+    source_language = translation_language(source_language)
+    target_language = translation_language(target_language)
+    if source_language == target_language:
+        return True
     if _find_installed_model(source_language, target_language) is not None:
         return True
     # 经英语中转时，两侧都必须已安装。
@@ -511,6 +531,8 @@ class TranslationService:
         self._online = MyMemoryTranslator()
 
     def translate(self, text: str, source_language: str | None, target_language: str) -> str:
+        source_language = translation_language(source_language)
+        target_language = translation_language(target_language)
         if not text or not target_language:
             return ""
         if not source_language or source_language == target_language:

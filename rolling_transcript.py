@@ -86,13 +86,20 @@ class RollingTranscript:
         confirmed = _key(self.confirmed_text[-128:])
         positions = [(index, char) for index, unit in enumerate(units) for char in _key(unit.text)]
         incoming = ''.join(key for _, key in positions)
-        for length in range(min(128, len(confirmed)), 1, -1):
+        for length in range(min(128, len(confirmed)), 0, -1):
             suffix = confirmed[-length:]
             start = 0
             candidates = []
             while (found := incoming.find(suffix, start)) >= 0:
                 end_index = positions[found + length - 1][0]
                 distance = abs(units[end_index].end - self.confirmed_end)
+                if length == 1 and not (
+                    units[end_index].start < self.confirmed_end and distance <= 0.2
+                ):
+                    # 单字前缀也可能因标点变化而轻微重定时，只去重跨过确认
+                    # 边界的同一字，不能按相同文字吞掉边界之后真正重复的字。
+                    start = found + 1
+                    continue
                 if distance <= 0.8:
                     candidates.append((distance, end_index))
                 start = found + 1
@@ -276,6 +283,16 @@ class RollingTranscript:
         """返回单个识别单元的比对键，原始单元内容不在此处丢弃。"""
         return _key(unit.text)
 
+    @classmethod
+    def _sentence_separator(cls, separators, following):
+        """只比较会触发落段的标点；逗号、空格和词内句点可直接修订。"""
+        return ''.join(
+            unit.text for unit in separators
+            if unit.text in cls.terminal_punctuation
+            and not (unit.text == '.' and following.text.isascii()
+                     and (following.text.isdigit() or following.text.islower()))
+        )
+
     def _select_pending(self, old_units, new_units):
         """新版本直接修订候选；静音空结果保留尾部直到语音结束确认。"""
         return new_units if new_units else old_units
@@ -354,12 +371,20 @@ class RollingTranscript:
             current = incoming[current_index]
             if current.end > audio_end - 0.6:
                 break
+            previous_separator_start = previous_index
             while previous_index < len(self.pending) and not self._unit_key(self.pending[previous_index]):
                 previous_index += 1
             if previous_index >= len(self.pending):
                 break
             previous = self.pending[previous_index]
             if self._unit_key(previous) != self._unit_key(current) or abs(previous.end - current.end) > 0.8:
+                current_index = separator_start
+                break
+            if self._sentence_separator(incoming[separator_start:current_index], current) != self._sentence_separator(
+                self.pending[previous_separator_start:previous_index], previous
+            ):
+                # 字相同不代表新增的句界已经稳定。先保留当前版本作即时草稿，
+                # 下一窗口仍给出同一标点才落段，避免撤回句号后留下“差。”尾字块。
                 current_index = separator_start
                 break
             previous_index += 1

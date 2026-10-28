@@ -1,22 +1,22 @@
-"""Explicit starting points, not a promise of accuracy or latency on every device."""
+"""Decoder presets independent of model selection and hardware."""
 
 PROFILES = {
-    "极速 · tiny": dict(model="tiny", beam=1, temperature="0", window=8, interval=0.1,
-                       description="优先尽快出字；适合清晰语音、低算力设备。复杂口音和噪声下更容易认错。"),
-    "流畅 · base": dict(model="base", beam=1, temperature="0", window=8, interval=0.1,
-                       description="比 tiny 使用更大的模型，仍采用最小搜索范围；适合日常对话。"),
-    "均衡 · small": dict(model="small", beam=3, temperature="0", window=8, interval=0.25,
-                        description="兼顾识别质量与耗时；可作为多数场景的起点。"),
-    "精度优先 · medium": dict(model="medium", beam=5, temperature="0,0.2,0.4", window=12, interval=0.5,
-                             description="更大模型、更多搜索和备用解码；更吃显存，出字可能明显变慢。"),
-    "大型精度 · large-v3": dict(model="large-v3", beam=5, temperature="0,0.2,0.4", window=16, interval=0.75,
-                              description="高算力设备可尝试；显存和耗时需求最高，不适合追求最低延迟。"),
+    "极速": dict(beam=1, temperature="0", context=False, window=8, interval=0.1,
+                description="最小搜索范围，不做备用解码；优先尽快出字。"),
+    "流畅": dict(beam=1, temperature="0", context=False, window=8, interval=0.25,
+                description="保持较小搜索范围，稍降低更新频率，减少持续计算。"),
+    "均衡": dict(beam=3, temperature="0", context=False, window=8, interval=0.25,
+                description="增加搜索范围，兼顾识别结果与计算耗时。"),
+    "精度优先": dict(beam=5, temperature="0,0.2,0.4", context=False, window=12, interval=0.5,
+                    description="更多搜索、备用解码与更长音频窗口；出字可能变慢。"),
+    "长上下文": dict(beam=5, temperature="0,0.2,0.4", context=True, window=16, interval=0.75,
+                    description="结合窗口内前文，使用更长窗口；耗时更多，出现重复时可关闭参考前文。"),
 }
 
 
 def profile_values(name):
     profile = PROFILES[name]
-    return dict(model=profile["model"], beam=profile["beam"], temperature=profile["temperature"],
-                context=False, window_seconds=profile["window"], update_interval=profile["interval"],
-                repetition_penalty=1.0, no_repeat_ngram_size=0,
-                no_speech_threshold=0.6, vad_silence_ms=400)
+    return dict(beam=profile["beam"], temperature=profile["temperature"],
+                context=profile["context"], window_seconds=profile["window"],
+                update_interval=profile["interval"], repetition_penalty=1.0,
+                no_repeat_ngram_size=0, no_speech_threshold=0.6, vad_silence_ms=400)

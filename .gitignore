@@ -85,3 +85,18 @@ id_ed25519*
 known_hosts
 credentials.json
 secrets.json
+
+# Public product-tour screenshots
+!/docs/images/overview.jpg
+!/docs/images/appearance.jpg
+
+# Public verification entrypoints referenced by current docs/tests
+!/tools/summarize_installed_acceptance.py
+!/tools/verify_choice_ui.py
+!/tools/verify_control_geometry.py
+!/tools/verify_design.py
+!/tools/verify_installed_recovery.py
+!/tools/verify_installed_runtime.py
+!/tools/verify_refactor_runtime.py
+!/tools/verify_streaming_translation.py
+!/tools/verify_tab_states.py

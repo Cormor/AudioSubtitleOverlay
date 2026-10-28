@@ -8,6 +8,11 @@ from subtitle_layout import ReadingCursor
 from transcription import WhisperRecognizer, RecognizedWord, clean_recognized_words
 from text_processing import remove_subtitle_credit
 
+def _fake_factory(recognizer_type):
+    return lambda options, on_status, **ignored: recognizer_type(
+        options.model_size, options.device_mode, options.model_path, on_status=on_status)
+
+
 def options(**changes):
     return replace(PipelineOptions('en','zh','tiny','CPU（int8）','','test audio','仅使用本地翻译'),**changes)
 
@@ -78,7 +83,7 @@ class TranslationDisableTests(unittest.TestCase):
         from test_pipeline_reconfiguration import _FakeCapture, _FakeRecognizer
         _FakeCapture.instances.clear();_FakeRecognizer.instances.clear();resets=[]
         p=pipeline(options(source_language='en',target_language='en'));p._on_reset=lambda:resets.append(True)
-        with patch.object(module,'SystemAudioCapture',_FakeCapture),patch.object(module,'WhisperRecognizer',_FakeRecognizer):
+        with patch.object(module,'SystemAudioCapture',_FakeCapture),patch.object(module,"_new_recognizer", _fake_factory(_FakeRecognizer)):
             p.start()
             deadline=time.monotonic()+2
             while time.monotonic()<deadline and (not _FakeRecognizer.instances or len(_FakeRecognizer.instances[0].languages)<2):time.sleep(.01)

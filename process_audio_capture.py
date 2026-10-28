@@ -396,6 +396,8 @@ class _ProcessLoopbackClient:
             return None
 
         output: list[np.ndarray] = []
+        packet_clock = []
+        samples_in_batch = 0
         while True:
             if stop_event.is_set():
                 return None
@@ -442,6 +444,14 @@ class _ProcessLoopbackClient:
             )
             try:
                 if frame_count.value:
+                    packet_clock.append({
+                        "sample_start": samples_in_batch,
+                        "sample_end": samples_in_batch + frame_count.value,
+                        "engine_start": (qpc_position.value / 10_000_000
+                                         if qpc_position.value and not flags.value & 0x4 else None),
+                        "flags": int(flags.value),
+                    })
+                    samples_in_batch += frame_count.value
                     if flags.value & 0x2 or not data:
                         samples = np.zeros(frame_count.value, dtype=np.float32)
                     else:
@@ -465,6 +475,9 @@ class _ProcessLoopbackClient:
 
         if not output:
             return None
+        # Keep the native packet clock separate from callback arrival time.
+        # The diagnostic trace maps words through these spans, including gaps.
+        self.latest_timing = {"clock": "wasapi_qpc", "packets": packet_clock}
         return np.concatenate(output)
 
     def close(self) -> None:
@@ -496,6 +509,7 @@ class ProcessAudioCapture:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._active_process_id: int | None = None
+        self.latest_timing = None
 
     def start(
         self,
@@ -653,6 +667,7 @@ class ProcessAudioCapture:
                         report_status("Beta：采集暂时中断，正在重新寻找应用")
                         continue
                     if frames is not None and frames.size:
+                        self.latest_timing = getattr(loopback, "latest_timing", None)
                         on_audio(frames)
                 else:
                     self._stop_event.wait(0.05)
@@ -692,6 +707,14 @@ class ProcessAudioCapture:
             None,
         )
         if current and current.peak is not None and current.peak >= _AUDIBLE_PEAK:
+            strongest = max(audible, key=lambda item: item.peak or 0.0)
+            # Session meters can remain above the detection floor on dither or
+            # remote-audio loopback. Keep comparable sources stable, but do not
+            # let that floor pin capture while another app becomes dominant.
+            # 4x separation and 0.1% full scale are a selection deadband, not VAD.
+            if (strongest.process_id != current.process_id
+                    and (strongest.peak or 0.0) >= max(current.peak * 4.0, 0.001)):
+                return strongest
             return current
         if current and now - last_signal_at < _SESSION_HOLD_SECONDS:
             return current
@@ -773,7 +796,7 @@ def _enumerate_audio_processes(excluded_process_id: int) -> list[AudioProcessCan
             "读取活动播放设备数量",
         )
 
-        process_names: dict[int, str] = {}
+        process_names: dict[int, str | None] = {}
         for device_index in range(device_count.value):
             device = ctypes.c_void_p()
             manager = ctypes.c_void_p()
@@ -918,6 +941,11 @@ def _enumerate_audio_processes(excluded_process_id: int) -> list[AudioProcessCan
                         if process_name is None:
                             process_name = _process_name(pid)
                             process_names[pid] = process_name
+                        if process_name is None:
+                            # Do not auto-target a session whose process identity
+                            # cannot be read (for example a protected service).
+                            logging.debug("跳过无法确认来源的音频会话：pid=%s", pid)
+                            continue
                         prior = sessions_by_process.get(pid)
                         if prior is None or (peak or 0.0) > (prior[1] or 0.0):
                             sessions_by_process[pid] = (process_name, peak)
@@ -949,8 +977,8 @@ def _enumerate_audio_processes(excluded_process_id: int) -> list[AudioProcessCan
     ]
 
 
-def _process_name(process_id: int) -> str:
-    """取得进程可执行文件名；读取失败时保留进程编号。"""
+def _process_name(process_id: int) -> str | None:
+    """取得可核对的进程文件名；无法读取时不提供自动音源身份。"""
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
     kernel32.OpenProcess.restype = ctypes.c_void_p
@@ -966,13 +994,13 @@ def _process_name(process_id: int) -> str:
 
     process = kernel32.OpenProcess(0x1000, False, process_id)
     if not process:
-        return f"进程 {process_id}"
+        return None
     try:
         buffer = ctypes.create_unicode_buffer(32768)
         length = ctypes.c_uint32(len(buffer))
         if not kernel32.QueryFullProcessImageNameW(process, 0, buffer, ctypes.byref(length)):
-            return f"进程 {process_id}"
-        return PureWindowsPath(buffer.value).name or f"进程 {process_id}"
+            return None
+        return PureWindowsPath(buffer.value).name or None
     finally:
         kernel32.CloseHandle(process)
 

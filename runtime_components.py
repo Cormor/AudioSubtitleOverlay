@@ -70,10 +70,12 @@ def component_spec(key: str) -> ComponentSpec:
 def prepare_component(
     key: str,
     on_progress: Callable[[DownloadProgress], None] | None = None,
+    cancel_wait: Callable[[], bool] | None = None,
 ) -> Path:
     """同步准备组件，调用方应位于后台线程。"""
     spec = component_spec(key)
-    return component_download_manager().ensure(spec, on_progress=on_progress)
+    wait_options = {"cancel_wait": cancel_wait} if cancel_wait is not None else {}
+    return component_download_manager().ensure(spec, on_progress=on_progress, **wait_options)
 
 
 def nvidia_driver_available() -> bool:

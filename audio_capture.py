@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 
 import numpy as np
@@ -22,6 +23,7 @@ class SystemAudioCapture:
         self._thread: threading.Thread | None = None
         self.resolved_device_name = ""
         self.resolved_is_loopback = False
+        self.latest_timing = None
 
     @staticmethod
     def list_loopback_devices() -> list[str]:
@@ -127,6 +129,9 @@ class SystemAudioCapture:
                         audio = audio.mean(axis=1)
                     audio = np.ravel(audio)
                     if audio.size:
+                        # SoundCard does not expose the native packet QPC here.
+                        self.latest_timing = {"clock": "callback_estimate",
+                                              "callback_at": time.perf_counter()}
                         on_audio(audio)
         except Exception as error:  # 设备异常需要交给界面显示
             if not self._stop_event.is_set():

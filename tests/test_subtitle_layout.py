@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+import time
 
 from subtitle_layout import (
     GROUP_GAP,
@@ -369,19 +370,17 @@ class FitRowsHeightTests(unittest.TestCase):
 class MotionTests(unittest.TestCase):
     def test_motion_converges_to_target(self):
         motion = Motion1D(duration_ms=0, value=0)
-        motion = Motion1D(duration_ms=0, value=0)
         motion.set_target(10)
-        value, done = motion.advance()
+        value, done = motion.advance(time.monotonic() + 2)
         self.assertTrue(done)
         self.assertEqual(value, 10)
 
     def test_motion_is_monotonic_toward_target(self):
-        motion = Motion1D(duration_ms=0, value=0)
-        motion.duration_ms = 100
+        motion = Motion1D(duration_ms=100, value=0)
         motion.set_target(10)
         previous = motion.value
         for step in range(1, 6):
-            value, _ = motion.advance(motion._started_at + step * 0.02)
+            value, _ = motion.advance(time.monotonic() + step * 0.02)
             self.assertGreaterEqual(value, previous)
             previous = value
         self.assertLessEqual(value, 10)
@@ -390,6 +389,7 @@ class MotionTests(unittest.TestCase):
         motion = Motion1D(duration_ms=100, value=0)
         motion.snap(5)
         self.assertEqual(motion.value, 5)
+        self.assertEqual(motion.velocity, 0)
         self.assertFalse(motion.running)
 
     def test_fade_progress_reaches_one(self):

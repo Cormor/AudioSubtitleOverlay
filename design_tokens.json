@@ -1,0 +1,120 @@
+{
+  "meta": {
+    "name": "砺行基础设计令牌",
+    "version": "2.0.0",
+    "baseline": "WCAG 2.2 AA as company web product baseline; exceptions and scope documented in README.md"
+  },
+  "color": {
+    "dark": {
+      "canvas": "#101112",
+      "surface": "#191B1D",
+      "surfaceRaised": "#222527",
+      "text": "#F4F1E8",
+      "textMuted": "#B7B0A3",
+      "border": "#555149",
+      "accent": "#E8C66A",
+      "onAccent": "#17140D",
+      "success": "#72D6A4",
+      "onSuccess": "#10251A",
+      "warning": "#FFD27A",
+      "onWarning": "#2A1C00",
+      "danger": "#FF8F86",
+      "onDanger": "#32110F",
+      "info": "#8CCBFF",
+      "onInfo": "#0D2233",
+      "focus": "#F5CE6A",
+      "controlBorder": "#8B8477",
+      "separator": "#3C3B36",
+      "hover": "#303337",
+      "pressed": "#101112",
+      "selection": "#41391F",
+      "disabledSurface": "#222527",
+      "disabledBorder": "#444541",
+      "textDisabled": "#918B80",
+      "accentHover": "#F3D787",
+      "accentPressed": "#D4AC46"
+    },
+    "light": {
+      "canvas": "#F7F6F2",
+      "surface": "#FFFFFF",
+      "surfaceRaised": "#F1EEE6",
+      "text": "#1E1C18",
+      "textMuted": "#5E594F",
+      "border": "#817A6C",
+      "accent": "#785500",
+      "onAccent": "#FFFFFF",
+      "accentFill": "#E8C66A",
+      "onAccentFill": "#211A08",
+      "success": "#176B42",
+      "onSuccess": "#FFFFFF",
+      "warning": "#705000",
+      "onWarning": "#FFFFFF",
+      "danger": "#A32E25",
+      "onDanger": "#FFFFFF",
+      "info": "#145C86",
+      "onInfo": "#FFFFFF",
+      "focus": "#674800",
+      "controlBorder": "#817A6C",
+      "separator": "#D6D1C6",
+      "hover": "#E6E2D8",
+      "pressed": "#D9D3C5",
+      "selection": "#F3E3B4",
+      "disabledSurface": "#EEECE6",
+      "disabledBorder": "#D0CDC4",
+      "textDisabled": "#777165",
+      "accentHover": "#F0D482",
+      "accentPressed": "#D4AE4A"
+    }
+  },
+  "motion": {
+    "model": "damped-spring",
+    "spring": {
+      "control": {
+        "mass": 1,
+        "stiffness": 900,
+        "dampingRatio": 1
+      },
+      "panel": {
+        "mass": 1,
+        "stiffness": 400,
+        "dampingRatio": 1
+      },
+      "expressive": {
+        "mass": 1,
+        "stiffness": 225,
+        "dampingRatio": 0.85
+      }
+    },
+    "rest": {
+      "displacement": 0.001,
+      "speed": 0.001
+    },
+    "reduced": "Set target immediately and clear velocity; react to preference changes during motion"
+  },
+  "components": {
+    "fontFamily": "Microsoft YaHei UI",
+    "bodyPt": 10,
+    "titlePt": 18,
+    "space": [
+      4,
+      8,
+      12,
+      16,
+      24
+    ],
+    "buttonRadiusPx": 8,
+    "inputRadiusPx": 8,
+    "checkboxRadiusPx": 3,
+    "buttonPaddingPx": [
+      14,
+      9
+    ],
+    "inputPaddingPx": [
+      10,
+      8
+    ],
+    "tableRowPx": 34,
+    "focusStrokePx": 2,
+    "units": "Tk logical pixels; positive font sizes are points; see docs/design-system.md"
+  }
+}

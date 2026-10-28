@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import deque
 import hashlib
 import json
 import logging
@@ -14,7 +15,7 @@ import time
 from typing import Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request, urlopen as _stdlib_urlopen, getproxies, build_opener, ProxyHandler
 import uuid
 import zipfile
 
@@ -23,12 +24,34 @@ LOGGER = logging.getLogger(__name__)
 COMPONENT_MARKER = ".audio-subtitle-overlay-component.json"
 
 
+def urlopen(request, **kwargs):
+    """Honor an explicitly configured ALL_PROXY for HTTP(S) downloads.
+
+    urllib does not map the all scheme to https. This matters when a Windows
+    process inherits ALL_PROXY, which also suppresses its registry proxy lookup.
+    Keep loopback test servers local and preserve normal per-scheme/no_proxy rules.
+    """
+    proxies = getproxies()
+    url = request.full_url if isinstance(request, Request) else str(request)
+    parsed = urlparse(url)
+    if (parsed.scheme in {"http", "https"} and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+            and "all" in proxies and parsed.scheme not in proxies):
+        normalized = dict(proxies)
+        normalized[parsed.scheme] = proxies["all"]
+        return build_opener(ProxyHandler(normalized)).open(request, **kwargs)
+    return _stdlib_urlopen(request, **kwargs)
+
+
 class DownloadError(RuntimeError):
     """组件下载或安装失败。"""
 
 
 class DownloadCancelled(DownloadError):
     """用户取消了下载。"""
+
+
+class DownloadWaitCancelled(DownloadError):
+    """调用方不再等待此组件；下载任务继续运行。"""
 
 
 class _PauseRequested(Exception):
@@ -187,6 +210,7 @@ class DownloadManager:
         chunk_size: int = 256 * 1024,
         request_timeout: float = 30.0,
         max_retries: int = 3,
+        max_concurrent: int = 2,
     ) -> None:
         self.cache_dir = Path(cache_dir)
         self.chunk_size = max(16 * 1024, int(chunk_size))
@@ -195,6 +219,10 @@ class DownloadManager:
         self._lock = threading.Lock()
         self._jobs: dict[str, _DownloadJob] = {}
         self._statuses: dict[str, DownloadProgress] = {}
+        self.max_concurrent = max(1, int(max_concurrent))
+        self._queue_condition = threading.Condition()
+        self._pending = deque()
+        self._running = 0
 
     def start(
         self,
@@ -218,12 +246,21 @@ class DownloadManager:
         on_finished: FinishedCallback | None = None,
     ) -> None:
         """异步构造组件并启动下载，适合需要先查询远端清单的模型。"""
+        self._start_or_join(key, factory, on_progress, on_finished, join=False)
+
+    def _start_or_join(self, key, factory, on_progress=None, on_finished=None, *, join):
         with self._lock:
             current = self._jobs.get(key)
             if current is not None and not current.done.is_set():
+                if join:
+                    return current
                 raise DownloadError(f"组件{key}已经在下载。")
             job = _DownloadJob(key, factory, on_progress, on_finished)
             self._jobs[key] = job
+            with self._queue_condition:
+                self._pending.append(job)
+                self._queue_condition.notify_all()
+        self._emit(job, state="排队", detail="等待下载；切换模型不会取消此任务。")
         thread = threading.Thread(
             target=self._run_job,
             args=(job,),
@@ -231,17 +268,20 @@ class DownloadManager:
             daemon=True,
         )
         thread.start()
+        return job
 
     def ensure(
         self,
         spec: ComponentSpec,
         on_progress: ProgressCallback | None = None,
+        cancel_wait: Callable[[], bool] | None = None,
     ) -> Path:
         """同步确保组件完成，调用方应在后台线程中使用。"""
         return self.ensure_factory(
             spec.key,
             lambda: spec,
             on_progress=on_progress,
+            cancel_wait=cancel_wait,
         )
 
     def ensure_factory(
@@ -249,17 +289,31 @@ class DownloadManager:
         key: str,
         factory: ComponentFactory,
         on_progress: ProgressCallback | None = None,
+        cancel_wait: Callable[[], bool] | None = None,
     ) -> Path:
         """同步构造并确保组件完成，构造过程也在下载线程中执行。"""
-        with self._lock:
-            current = self._jobs.get(key)
-        if current is None or current.done.is_set():
-            self.start_factory(key, factory, on_progress=on_progress)
-            with self._lock:
-                current = self._jobs.get(key)
-        if current is None:
-            raise DownloadError(f"无法创建组件{key}的下载任务。")
-        current.done.wait()
+        def check_wait():
+            if cancel_wait is not None and cancel_wait():
+                raise DownloadWaitCancelled(f"已停止等待组件{key}；下载继续。")
+
+        check_wait()
+        # Progress belongs to this waiter, not to the persistent shared job.
+        # A model switch detaches the old waiter without publishing stale UI state.
+        current = self._start_or_join(key, factory, join=True)
+        last_progress = None
+        while True:
+            check_wait()
+            snapshot = current.progress
+            if on_progress and snapshot is not None and snapshot is not last_progress:
+                last_progress = snapshot
+                try:
+                    on_progress(snapshot)
+                except Exception:
+                    LOGGER.exception("组件等待进度回调失败：%s", key)
+            if current.done.is_set():
+                break
+            current.done.wait(0.05)
+        check_wait()
         if current.error is not None:
             raise DownloadError(str(current.error)) from current.error
         spec = current.spec
@@ -349,7 +403,23 @@ class DownloadManager:
     def _run_job(self, job: _DownloadJob) -> None:
         state = "失败"
         detail = ""
+        owns_slot = False
         try:
+            with self._queue_condition:
+                # Direct lifecycle tests can supply a registered job themselves.
+                if job not in self._pending:
+                    self._pending.append(job)
+                while True:
+                    if job.cancel_requested:
+                        raise DownloadCancelled("已取消排队，已下载的断点保留。")
+                    if (self._pending[0] is job and self._running < self.max_concurrent
+                            and not job.pause_requested):
+                        self._pending.popleft()
+                        self._running += 1
+                        owns_slot = True
+                        self._queue_condition.notify_all()
+                        break
+                    self._queue_condition.wait(0.05)
             spec = job.factory()
             job.spec = spec
             self._validate_spec(spec)
@@ -384,6 +454,12 @@ class DownloadManager:
             LOGGER.exception("组件下载失败：%s", job.key)
             self._emit(job, state="失败", detail=detail)
         finally:
+            with self._queue_condition:
+                if owns_slot:
+                    self._running -= 1
+                elif job in self._pending:
+                    self._pending.remove(job)
+                self._queue_condition.notify_all()
             job.done.set()
             if job.on_finished:
                 try:
