@@ -492,6 +492,7 @@ class DisplayOverlayIntegrationTests(unittest.TestCase):
         app._controller = controller
         app.pipeline = controller.start(options, handlers)
         app._live_update_after_id = None
+        app._closing = False
         app._pipeline_options_from_ui = lambda: options
         app._set_status = lambda _: None
         Application._apply_live_configuration(app)

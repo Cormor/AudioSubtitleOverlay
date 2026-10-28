@@ -1,6 +1,4 @@
 """Keep isolated acceptance models managed and shared, not a custom override."""
-import ast
-import inspect
 import os
 from pathlib import Path
 import subprocess
@@ -75,13 +73,10 @@ class InstalledRuntimeModelCacheTests(unittest.TestCase):
         self.assertFalse(created)
 
     def test_cli_settings_leave_custom_model_override_empty(self):
-        # This catches the actual regression without starting Windows audio/UI.
-        tree = ast.parse(inspect.getsource(module.main))
-        overrides = [keyword.value for node in ast.walk(tree) if isinstance(node, ast.Call)
-                     for keyword in node.keywords if keyword.arg == 'model_path']
-        self.assertEqual(len(overrides), 1)
-        self.assertIsInstance(overrides[0], ast.Constant)
-        self.assertEqual(overrides[0].value, '')
+        settings=module.build_acceptance_settings({},source_name='Synthetic speaker')
+        self.assertEqual(settings['model_path'],'')
+        self.assertEqual(settings['recognition_model'],'sensevoice-int8')
+
 
 
 if __name__ == '__main__':

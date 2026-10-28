@@ -131,10 +131,25 @@ def _elements(root, style, p):
         pressed = rounded(p["pressed"] if not selected else p["accentPressed"], p["accent"], tab=tab)
         focus = rounded(fill, border, True, tab=tab)
         focus_hover = rounded(p["hover"] if not selected else p["accentHover"], p["controlBorder"], True, tab=tab)
-        style.element_create(prefix+name, "image", base, ("disabled", disabled),
+        invalid_states = []
+        if name == "Entry":
+            invalid_states = [
+                ("focus","invalid","pressed",rounded(p["pressed"],p["danger"],True)),
+                ("invalid","pressed",rounded(p["pressed"],p["danger"])),
+                ("focus","invalid","hover",rounded(p["hover"],p["danger"],True)),
+                ("focus","invalid","active",rounded(p["hover"],p["danger"],True)),
+                ("focus","invalid",rounded(fill,p["danger"],True)),
+                ("invalid","hover",rounded(p["hover"],p["danger"])),
+                ("invalid","active",rounded(p["hover"],p["danger"])),
+                ("invalid",rounded(fill,p["danger"])),
+            ]
+        style.element_create(prefix+name, "image", base, ("disabled", disabled), *invalid_states,
                              ("focus", "pressed", rounded(p["pressed"] if not selected else p["accentPressed"], p["accent"], True)),
                              ("pressed", "!disabled", pressed), ("focus", "active", focus_hover),
-                             ("focus", focus), ("active", hover), border=12, padding=inset, width=24, height=24, sticky="nsew")
+                             *([("focus", "hover", focus_hover)] if name == "Entry" else []),
+                             ("focus", focus),
+                             *([("hover", hover)] if name == "Entry" else []),
+                             ("active", hover), border=12, padding=inset, width=24, height=24, sticky="nsew")
         return prefix+name
 
     for name, fill, border, selected in (
@@ -151,7 +166,7 @@ def _elements(root, style, p):
                          ("selected", selected), ("focus", "user1", rounded(p["canvas"],p["canvas"],tab=True,tab_focus=True)),
                          ("active",rounded(p["hover"],p["hover"])), border=12, padding=0, width=24, height=24, sticky="nsew")
 
-    def indicator(selected=False, disabled=False, focus=False, hover=False):
+    def indicator(selected=False, disabled=False, focus=False, hover=False, alternate=False):
         def draw(d, s, w, h):
             if focus:
                 d.rounded_rectangle((0,0,23*s,23*s),radius=6*s,outline=p["focus"],width=2*s)
@@ -159,12 +174,19 @@ def _elements(root, style, p):
                     p.get("accentFill",p["accent"]) if selected else p["hover"] if hover else p["surfaceRaised"])
             outline = p["disabledBorder"] if disabled else p["accent"] if selected else p["controlBorder"]
             d.rounded_rectangle((4*s,4*s,19*s,19*s),radius=3*s,fill=fill,outline=outline,width=s)
-            if selected:
+            if alternate:
+                d.line([(8*s,12*s),(15*s,12*s)],
+                       fill=p["textDisabled"] if disabled else p["textMuted"],width=2*s)
+            elif selected:
                 d.line([(7*s,11*s),(10*s,14*s),(16*s,8*s)],
                        fill=p["textDisabled"] if disabled else p.get("onAccentFill",p["onAccent"]),width=2*s,joint="curve")
         return photo(draw,24,24)
     style.element_create(prefix+"Check", "image", indicator(),
+                         ("disabled","alternate",indicator(disabled=True,alternate=True)),
                          ("disabled","selected",indicator(True,True)), ("disabled",indicator(False,True)),
+                         ("focus","alternate",indicator(focus=True,alternate=True)),
+                         ("alternate","active",indicator(hover=True,alternate=True)),
+                         ("alternate",indicator(alternate=True)),
                          ("focus","selected",indicator(True,focus=True)), ("focus",indicator(focus=True)),
                          ("selected",indicator(True)), ("active",indicator(hover=True)), sticky="w", width=28)
     def chevron(color):
@@ -255,7 +277,9 @@ def apply_theme(root, preference="system") -> dict[str, str]:
         style.configure(name, padding=(6,5), fieldbackground=p["surfaceRaised"], background=p["surface"],
                         foreground=p["text"], insertcolor=p["text"], arrowcolor=p["text"], arrowsize=14,
                         selectbackground=p["selection"],selectforeground=p["text"])
-        style.map(name, fieldbackground=[("disabled",p["disabledSurface"]),("readonly",p["surfaceRaised"])],
+        style.map(name, fieldbackground=[("disabled",p["disabledSurface"]),
+                    ("pressed",p["pressed"]),("hover",p["hover"]),("active",p["hover"]),
+                    ("readonly",p["surfaceRaised"]),("!disabled",p["surfaceRaised"])],
                   foreground=[("disabled",p["textDisabled"]),("!disabled",p["text"])],
                   arrowcolor=[("disabled",p["textDisabled"]),("!disabled",p["text"])],background=[("active",p["surface"]),("!disabled",p["surface"])])
     style.configure("Treeview", background=p["surface"], fieldbackground=p["surface"], foreground=p["text"],

@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -19,9 +20,11 @@ import time
 MAX_TRACE_BYTES = 128 * 1024 * 1024
 MAX_EVENTS = 200_000
 SOURCE_FILES = ('VERSION', 'pipeline.py', 'subtitle_events.py', 'display_module.py',
+                'text_processing.py',
                 'main.py', 'application_controller.py', 'overlay.py', 'runtime_trace.py',
                 'translation.py', 'runtime_workers.py', 'recognition_sessions.py',
                 'asr_backends.py', 'rolling_transcript.py', 'tools/benchmark_replay.py')
+CONTRACT_FILES=('subtitle_events.py','text_processing.py','display_module.py')
 
 
 def sha256(path):
@@ -34,6 +37,45 @@ def sha256(path):
 
 def source_identity(source):
     return {name: sha256(source / name) for name in SOURCE_FILES}
+
+
+def analysis_contract_identity(source,expected=None):
+    actual={name:sha256(source/name) for name in CONTRACT_FILES}
+    if expected is not None and any(expected.get(name)!=digest for name,digest in actual.items()):
+        raise ValueError('Source/display analysis contracts differ from target BUILD_INFO')
+    return actual
+
+
+def target_build_contract(executable):
+    candidates=(executable.parent/'_internal/BUILD_INFO.json',executable.parent/'BUILD_INFO.json')
+    path=next((candidate for candidate in candidates if candidate.is_file()),None)
+    if path is None:raise ValueError('Target BUILD_INFO is required to bind display normalization')
+    metadata=json.loads(path.read_text(encoding='utf-8'))
+    expected=metadata.get('source_files')
+    if not isinstance(expected,dict) or any(not isinstance(expected.get(name),str) for name in CONTRACT_FILES):
+        raise ValueError('Target BUILD_INFO lacks source/display contract identities')
+    return expected,dict(path=str(path),sha256=sha256(path),version=metadata.get('version'))
+
+
+def load_analysis_contracts(source,expected=None):
+    """Load the exact production source/display rules without an Application or GUI."""
+    identity=analysis_contract_identity(source,expected)
+    previous={name:sys.modules.get(Path(name).stem) for name in CONTRACT_FILES}
+    modules={}
+    try:
+        for name in CONTRACT_FILES:
+            stem=Path(name).stem;alias='streaming_contract_'+stem+'_'+identity[name][:12]
+            spec=importlib.util.spec_from_file_location(alias,source/name)
+            module=importlib.util.module_from_spec(spec);sys.modules[alias]=module;sys.modules[stem]=module
+            spec.loader.exec_module(module);modules[stem]=module
+        if analysis_contract_identity(source,expected)!=identity:
+            raise ValueError('Analysis contracts changed while loading')
+        return modules['subtitle_events'].source_text_extends,modules['display_module'].DisplayModule._normalize_text,identity
+    finally:
+        for name,value in previous.items():
+            stem=Path(name).stem
+            if value is None:sys.modules.pop(stem,None)
+            else:sys.modules[stem]=value
 
 
 def normalize(text):
@@ -95,7 +137,10 @@ def load_trace(directory):
     return rows, metadata
 
 
-def analyze(rows, metadata, extends, minimum_partial=2):
+def analyze(rows, metadata, extends, minimum_partial=2,*,display_normalizer=None):
+    if display_normalizer is None:
+        from display_module import DisplayModule
+        display_normalizer=DisplayModule._normalize_text
     failures = []
     if not metadata.get('text_included'):
         failures.append('trace_text_missing')
@@ -129,6 +174,25 @@ def analyze(rows, metadata, extends, minimum_partial=2):
                 first_final_perf[block_key(row)] = min(first_final_perf.get(block_key(row), float('inf')), row['perf'])
         elif row.get('kind') in {'translation', 'translation_not_applied'}:
             translations.setdefault(translation_key(row), []).append(row)
+
+    ui_histories={}
+    for row in rows:
+        if row.get('kind')!='presented':continue
+        at=row.get('presented_at')
+        if type(at) not in (int,float) or not math.isfinite(at) or row.get('perf',at)<at:
+            failures.append('invalid_source_presentation_time');continue
+        matching=[version for version in source_versions.get(source_key(row),[])
+                  if version.get('perf',float('inf'))<=at and all(version.get(name)==row.get(name)
+                     for name in ('revision','final','text','language'))]
+        if not matching:
+            failures.append('unmatched_source_presentation');continue
+        version=max(matching,key=lambda item:item['perf'])
+        ui_histories.setdefault(block_key(row),[]).append((at,version))
+    if not ui_histories:failures.append('source_presentation_evidence_missing')
+    for versions in ui_histories.values():
+        ordered=sorted(versions,key=lambda item:(item[0],item[1]['sequence']))
+        if any(a[1]['sequence']>b[1]['sequence'] for a,b in zip(ordered,ordered[1:])):
+            failures.append('source_presentation_sequence_regressed')
 
     def model_completed(result):
         key = translation_key(result)
@@ -171,14 +235,15 @@ def analyze(rows, metadata, extends, minimum_partial=2):
             version_rows = [item for item in source_versions.get(source_key(frame), [])
                             if item.get('perf', float('inf')) <= presented]
             source = max(version_rows, key=lambda item: item['perf'], default=None)
-            current_rows = [item for item in histories.get(block_key(frame), [])
-                            if item.get('perf', float('inf')) <= presented]
-            current = max(current_rows, key=lambda item: (item['sequence'], item['perf']), default=None)
+            current_rows = [(at,item) for at,item in ui_histories.get(block_key(frame), []) if at<=presented]
+            shown=max(current_rows,key=lambda item:(item[0],item[1]['sequence']),default=None)
+            current=shown[1] if shown else None
             active = max((item for item in contexts if item.get('perf', float('inf')) <= presented),
                          key=lambda item: item['perf'], default=None)
             valid = bool(result and source and current and active)
             if valid:
-                valid = (result.get('source_text') == source['text'] == frame.get('source_text')
+                valid = (result.get('source_text') == source['text']
+                         and display_normalizer(source['text'],source.get('language')) == frame.get('source_text')
                          and result.get('source_language') == source.get('language')
                          and result.get('perf', float('inf')) <= presented
                          and real_text(result.get('text', ''))
@@ -213,7 +278,8 @@ def analyze(rows, metadata, extends, minimum_partial=2):
                 partials.setdefault(block_key(frame), {})[frame['sequence']] = presented
             if (frame.get('final') and frame.get('source_final')
                     and frame.get('translation_state') == 'final' and not frame.get('pending')
-                    and frame['sequence'] == current['sequence'] and frame['source_text'] == current['text']):
+                    and frame['sequence'] == current['sequence']
+                    and frame['source_text'] == display_normalizer(current['text'],current.get('language'))):
                 final_frames[source_key(frame)] = presented
 
     partial_count = sum(len(values) for values in partials.values())
@@ -245,6 +311,7 @@ def analyze(rows, metadata, extends, minimum_partial=2):
     return dict(success=not failures, failures=sorted(set(failures)), source_events=len(sources),
                 source_partial_events=sum(not row.get('final') for row in sources.values()),
                 source_final_events=len(finals), received_translation_results=len(translations),
+                source_presentation_events=sum(len(items) for items in ui_histories.values()),
                 immediately_applied_translation_results=sum(row.get('display_applied') is True for versions in translations.values() for row in versions),
                 matched_translation_frames=matched_frames, invalid_translation_frames=invalid_frames,
                 distinct_drafts_drawn_before_final=partial_count,
@@ -381,10 +448,10 @@ def main():
             raise ValueError('Installed run record does not identify this executable')
         contract = Path(__file__).resolve().parents[1] / 'subtitle_events.py'
         identity = dict(exe=str(args.exe), executable_sha256=sha256(args.exe), run_record=record)
-    spec = importlib.util.spec_from_file_location('streaming_acceptance_contract', contract)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    expected=None;build_binding=None
+    if args.exe is not None:expected,build_binding=target_build_contract(args.exe)
+    extends,display_normalizer,contract_hashes=load_analysis_contracts(contract.parent,expected)
+    identity['analysis_contract_binding']=dict(source_files=contract_hashes,target_build=build_binding)
     if args.wav:
         directory, provenance = replay(args, output)
         identity.update(provenance=provenance)
@@ -394,9 +461,9 @@ def main():
         record = json.loads(args.run_record.read_text(encoding='utf-8'))
     rows, metadata = load_trace(directory)
     identity['producer_binding'] = bind_trace(directory, metadata, record, source=args.source, exe=args.exe)
-    result = analyze(rows, metadata, module.source_text_extends, args.minimum_partials)
+    result = analyze(rows, metadata, extends, args.minimum_partials,display_normalizer=display_normalizer)
     result.update(trace=str(directory), trace_metadata=metadata, artifact=identity,
-                  contract_sha256=sha256(contract))
+                  contract_sha256=contract_hashes['subtitle_events.py'],display_contract_sha256=contract_hashes)
     (output / 'result.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(result, ensure_ascii=True))
     return not result['success']

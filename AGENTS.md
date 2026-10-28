@@ -16,11 +16,11 @@
 ## 运行日志保留
 
 - `logs/app.log` 及其轮转文件由 `log_retention.py` 管理，遵循全局 30 天/30 MiB 上限和最近 15 天/至少 10 MiB 保留规则；单文件轮转上限 10 MiB，启动时和运行期间每日检查。
-- GitHub正式v1.4.1提交为696dc4a9d50b57eee047e403fe7c57a18be73c84，保存在codex/release-1.4.1；当前本机已安装2.1.0草稿翻译构建（源码modified），维护分支codex/shengmu-2-refactor；1.4修复已保留。安装位置以Apps索引为准；原开发工作树已有修改继续保留。
+- GitHub正式v1.4.1提交为696dc4a9d50b57eee047e403fe7c57a18be73c84，保存在codex/release-1.4.1；2.1.0草稿翻译源码检查点已上传，当前源码维护2.2.0，实际安装版本以Apps索引为准，维护分支codex/shengmu-2-refactor；1.4修复已保留。安装位置以Apps索引为准；原开发工作树已有修改继续保留。
 
 ## 本机运行布局与后续维护
 
-- 本机统一入口：`../Apps/AudioSubtitleOverlay`；本机已安装2.1.0草稿翻译版。实际位置及版本变更以 `../Apps/catalog.json` 为准。
+- 本机统一入口：`../Apps/AudioSubtitleOverlay`；实际安装版本与位置以 `../Apps/catalog.json` 和当前交付回执为准。
 - 开发源码：`../audio_subtitle_overlay_followup`；本目录与其他工作树均保留已有分支/修改。构建与维护：build_windows.bat；本地改动版使用现有 tools/package_and_install.py 的开发构建参数，正式包按 clean 源码规则处理。
 - 开始菜单沿用声幕.lnk和既有安装身份；Apps联接与实际生效入口按Apps索引和安装回执核对；不要把 main 的旧版本覆盖到当前开发版。模型归档统一保留当前正式发布的tiny模型包（见Apps索引）；旧校验/交付记录是历史记录。安装器当前仍生成版本目录，下次升级后必须按本机规则清理旧安装。
 - 每次本地构建交付后更新唯一运行入口；历史最多留最近3实际版本压缩包及必要元数据，删除重复解压副本与构建中间产物，保留配置、源码、依赖及诊断/恢复资料。联接不要递归跟随清理，完整说明见 `../Apps/README.md`。
@@ -82,4 +82,14 @@
 - tools/verify_streaming_translation.py复用有界固定WAV回放或读取安装版trace，连接MT结果与实际非占位translation_frame片段；正常、失败、改写、final、配置切换、停止和有界性共同验收。受控单测不替代同包真实模型效率及可见译文。
 - 新增诊断字段时检查RuntimeTrace默认脱敏；source_text和text仅在显式--trace-text时保留。普通运行不开启正文或录音证据。
 
-当前安装事实：2026-10-28已由既有安装器安装2.1.0，沿用AudioSubtitleOverlay身份与声幕.lnk；真实运行验收与最终入口回读按本轮安装回执更新。正式配置恢复使用当时最新保存值，不能套用旧记录中的Beta、模型或语言组合。
+2.1安装记录：2026-10-28已由既有安装器安装2.1.0，沿用AudioSubtitleOverlay身份与声幕.lnk；真实运行验收与最终入口回读按本轮安装回执更新。正式配置恢复使用当时最新保存值，不能套用旧记录中的Beta、模型或语言组合。
+
+
+## 2.2 控件与鼠标穿透维护
+
+- 功能与输入范围见docs/controls-input-2.2.0.md；本轮源码版本2.2.0。已上传2.1检查点与已发布1.4.1仍为各自历史事实，2.2安装/包与实际用途结果只按该版本交付回执回填。该文档同时维护呈现版本、原生/Tk消息和默认DPI/真实焦点链的QA约定；相关工具或诊断字段变化时同步核对。
+- recognition_parameters.py是数值类型、编辑允许域和已提交编解码的共同来源；推荐列表不作白名单。UI原始draft与committed分开，Enter/真正失焦/推荐选择才提交，自己的弹层不先提交草稿；Esc取消与销毁丢弃遵同一合同。未改动的合法已保存值不重套编辑字面量限长。验证必须沿Settings save/load到实际decoder入参，不只测validator。
+- 只读选择器闭合框仍为ttk.Combobox，choice_popup只替换弹层；whole-widget hover与元素active不同。实际指针逐一经过文字、空白、边和箭头，核对state/identify/像素、真正离开及focus/open/disabled组合。错误内边框与焦点外环并存。
+- overlay_mouse_passthrough保存偏好与原生effective分开；callback在Tk主线程统一消费，unknown用alternate并保旧偏好。保存True应用前先连接当前owner回调和主窗/托盘外部恢复，无托盘保留任务栏。原生失败按实际bool回读、None明确未知且False恢复始终可达；退出/销毁/旧owner/迟到托盘动作不得重建窗口或保存。
+- GUI和真实输入保持唯一操作者；仅向核准PID/HWND/创建时间且实际命中的自有窗口发有界输入。移动指针前也核五鼠标键和foreground/current GUI capture/menu/movesize；外部capture或身份变化即停止，保留准备失败，不改第三方窗口/游戏或系统前台锁。源码无窗口、原生输入与最终冻结包证据分别记录。
+- 复用物理滚动时核对隐藏/销毁停调度、关动态即刻snap且清速度、减少动态优先，以及当前速度的中途反向。设计职责、实际轨迹与原生时序按受影响范围交接，静态控件不加无收益动画。

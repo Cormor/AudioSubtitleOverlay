@@ -1,6 +1,6 @@
 # Shengmu · Live Captions and Translation
 
-This branch is a source checkpoint of the current 2.1 development version. The latest published download remains 1.4.1; this checkpoint does not publish a new release. See the [streaming translation guide](docs/streaming-translation.md) and [engineering notes](docs/refactor-2.0.md).
+The working source version is 2.2.0. The uploaded 2.1 source checkpoint and the published 1.4.1 download retain their own version history. See [controls, custom parameters, and mouse passthrough](docs/controls-input-2.2.0.md), the [streaming translation guide](docs/streaming-translation.md), and [engineering notes](docs/refactor-2.0.md). Source changes and installed-build verification are recorded separately.
 
 <p align="center"><img src="assets/brand/icon.png" alt="Shengmu icon" width="88"></p>
 
@@ -17,7 +17,8 @@ Follow videos, livestreams, and online classes, or transcribe speech from a micr
 
 - **Read while listening:** transcribe PC playback or microphone input. Draft captions are revised as more speech arrives.
 - **Read translations as speech continues:** translation starts from source drafts, updates the same segment as speech continues, and aligns with the final source text. Choose local or online translation, or turn it off.
-- **Make captions comfortable to read:** move and resize the floating window; adjust fonts, colors, and background opacity, or use a preset.
+- **Make captions comfortable to read:** move and resize the floating window; adjust fonts, colors, and background opacity, or use a preset. Enable mouse passthrough to operate the window underneath; restore mouse operation from Settings or the tray.
+- **Use custom parameters:** choose recommended values or enter numbers within the allowed ranges. Recognition keeps the committed value while you type a draft.
 - **Keep useful text:** review the latest 64 segments, copy them, or export a TXT file.
 - **Keep your screen clear:** closing or minimizing Settings leaves captions running. Restore Settings from the Windows tray icon.
 
@@ -73,6 +74,12 @@ Translation settings can change while recognition continues on the selected audi
 Open **字幕外观** (caption appearance). Try **深色高对比** (dark high contrast), **浅色清晰** (light), or **透明描边** (transparent with outlines), then adjust font sizes and opacity. Drag the overlay to move it, or drag its lower-right corner to resize. **找回字幕窗** brings the overlay back onto the screen.
 
 ![Appearance settings with presets, font sizes, colors, opacity, and restore controls](docs/images/appearance-2.0.png)
+
+*This image shows the 2.0 appearance page. Version 2.2 adds a mouse-operation card while retaining personal caption styles.*
+
+On **高级设置** (advanced settings), edit the numeric field and press Enter or leave it to apply a valid value; Esc restores the committed value. The arrow lists recommendations. See the [input ranges and engine-specific behavior](docs/controls-input-2.2.0.md).
+
+Enable **让鼠标穿过字幕窗** to pass all overlay mouse input to the window underneath. Choose **恢复鼠标操作** in Settings or the tray to restore it. The restore button remains available when the native state cannot be confirmed.
 
 ## Common questions
 

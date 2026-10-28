@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from dataclasses import asdict
 import logging
 from log_retention import 保留日志处理器
 import queue
 import multiprocessing
 import sys
+import threading
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
@@ -37,6 +39,8 @@ from ui_guidance import (DEVICE_FILTERS, DEVICE_MODE_LABELS, MODEL_FILTERS,
                          model_group, model_guidance, model_label, runtime_view)
 from overlay import OverlayWindow
 from pipeline import LivePipeline, PipelineOptions
+from recognition_parameters import (PARAMETERS, ParameterDraft, numeric_value, number_text,
+    temperature_values, temperature_text, parameter_is_consumed, RECOGNITION_TEMPERATURE_SCHEDULES)
 from settings import (
     RECOGNITION_BEAM_SIZES, RECOGNITION_NUMERIC_OPTIONS,
     Settings,
@@ -77,6 +81,7 @@ class Application:
         self._overlay_source_text = ""
         self._overlay_source_label = "源语言"
         self._closing = False
+        self._exit_requested = False
         self._stopping = False
         self._last_error = ""
         self._runtime_phase = "idle"
@@ -116,6 +121,7 @@ class Application:
             self.close,
         )
         self.overlay.on_presented = self._display_presented
+        self._connect_mouse_passthrough()
         self._refresh_devices()
         self._apply_overlay_settings()
         self._on_language_changed()
@@ -125,9 +131,11 @@ class Application:
         self._tray = TrayController(
             self._post, show_settings=self._show_settings, show_overlay=self._show_overlay,
             hide_overlay=self.overlay.hide, start=self._start, stop=self._stop, close=self.close,
+            restore_mouse=self._restore_mouse_operation,
         ) if tray else None
         if self._tray:
             self._tray.start()
+        self.root.after_idle(self._start_mouse_passthrough)
         self.root.bind("<Unmap>", self._on_settings_unmap, add="+")
         self.root.bind("<FocusIn>", self._queue_overlay_focus, add="+")
         self.root.bind("<FocusOut>", self._queue_overlay_focus, add="+")
@@ -138,7 +146,7 @@ class Application:
         if self.settings.auto_start if autostart is None else autostart:
             self.root.after_idle(self._start)
         if self.settings.start_minimized:
-            self.root.after(200, self._hide_settings)
+            self.root.after(200, self._hide_settings_on_startup)
         self._drain_after_id = self.root.after(10, self._drain_events)
         self._theme_poll_id = self.root.after(1500, self._poll_theme)
 
@@ -156,7 +164,7 @@ class Application:
         )
         temperature_value = self.settings.recognition_temperature_schedule
         self.temperature_var = tk.StringVar(
-            value=_TEMPERATURE_LABELS.get(temperature_value, _TEMPERATURE_LABELS["0"])
+            value=_TEMPERATURE_LABELS.get(temperature_value, temperature_value)
         )
         self.recognition_vars = {
             name: tk.StringVar(value=str(getattr(self.settings, "recognition_" + name)))
@@ -197,6 +205,8 @@ class Application:
         self._model_definitions = {item.key: item for item in MODEL_DEFINITIONS}
         self.source_display_var = tk.StringVar(value="等待识别")
         self.translation_display_var = tk.StringVar(value="等待翻译")
+        self._initialize_parameter_drafts()
+        self._initialize_mouse_passthrough()
 
     def _update_audio_selection(self, *_args) -> None:
         """选择项变化只更新选择状态，不冒充已打开的采集设备。"""
@@ -243,12 +253,58 @@ class Application:
             self._bind_card_wrapping(child)
 
     def _resize_card_labels(self, event) -> None:
-        for label in event.widget.winfo_children():
-            if not isinstance(label, ttk.Label) or not float(label.cget("wraplength") or 0):
-                continue
-            info = label.grid_info()
-            inset = 160 if info and int(info.get("column", 0)) > 0 else 40
-            label.configure(wraplength=max(220, event.width - inset))
+        frame = event.widget
+        if not self._controls_alive() or not isinstance(frame, ttk.LabelFrame):
+            return
+        jobs = getattr(self, "_label_wrap_jobs", None)
+        if jobs is None:
+            self._label_wrap_jobs = jobs = {}
+        if frame in jobs:
+            return
+        token = None
+        def reflow():
+            if jobs.get(frame) != token:
+                return
+            jobs.pop(frame, None)
+            if not self._controls_alive():
+                return
+            try:
+                if not frame.winfo_exists():
+                    return
+                for label in frame.winfo_children():
+                    if not isinstance(label, ttk.Label):
+                        continue
+                    current = float(label.cget("wraplength") or 0)
+                    manager = label.winfo_manager()
+                    if current <= 0 or manager not in {"grid", "pack"}:
+                        continue
+                    if manager == "grid":
+                        info = label.grid_info()
+                        column, row = int(info["column"]), int(info["row"])
+                        span = int(info["columnspan"])
+                        width = frame.grid_bbox(column, row, column + span - 1,
+                                                row + int(info["rowspan"]) - 1)[2]
+                        if width <= 1:
+                            continue
+                        padx = info.get("padx", 0)
+                        pads = padx if isinstance(padx, (tuple, list)) else label.tk.splitlist(str(padx))
+                        left = label.winfo_pixels(str(pads[0])) if pads else 0
+                        right = label.winfo_pixels(str(pads[-1])) if pads else 0
+                        available = max(1, width - left - right - 4)
+                    else:
+                        # A non-filling packed label reports its own requested
+                        # width. Use the enclosing slot so repeated layouts do
+                        # not shrink that label a little further each time.
+                        width = frame.winfo_width()
+                        if width <= 1:
+                            continue
+                        available = max(1, width - 40)
+                    if current != available:
+                        label.configure(wraplength=available)
+            except tk.TclError:
+                return
+        token = self.root.after_idle(reflow)
+        jobs[frame] = token
 
     def _resize_preview(self, width: int) -> None:
         for label in (self.source_preview, self.translation_preview):
@@ -549,7 +605,7 @@ class Application:
         self.current_profile_var.set(f"当前识别参数：{matched or '自定义'}；模型单独选择")
         self.profile_hint_var.set((PROFILES[matched]["description"] if matched else
                                   "点击预设可统一改参；模型、设备、语言和音频来源不变。")
-                                 + " 运行中自动应用，无需手动停止再开始。")
+                                 + " 当前引擎使用的参数自动应用；其余保留为对应引擎偏好。")
         for name, button in getattr(self, "_profile_buttons", {}).items():
             button.configure(text=("✓ " if name == matched else "") + name,
                              style="SelectedProfile.TButton" if name == matched else "TButton")
@@ -570,7 +626,7 @@ class Application:
         self._save_settings()
         self._update_current_profile()
         if self.pipeline is None:
-            self._set_status(f"已保存“{name}”参数预设；模型保持不变。")
+            self._set_status(f"已选择“{name}”参数预设；模型保持不变。")
 
     def _build_overlay_controls(self, parent) -> None:
         parent.columnconfigure(1, weight=1)
@@ -636,7 +692,7 @@ class Application:
         variable,
         values,
         width=20,
-        readonly=False,
+        readonly=True,
     ):
         ttk.Label(parent, text=label).grid(row=row, column=0, padx=(0, 8), pady=5, sticky="w")
         combo = ttk.Combobox(
@@ -644,10 +700,236 @@ class Application:
             textvariable=variable,
             values=values,
             width=width,
-            state="readonly" if values or readonly else "normal",
+            state="readonly" if readonly else "normal",
         )
         combo.grid(row=row, column=1, columnspan=1, pady=5, sticky="ew")
         return combo
+
+    def _parameter_variable(self, name):
+        return self.temperature_var if name == "temperature_schedule" else (
+            self.beam_size_var if name == "beam_size" else self.recognition_vars[name])
+
+    def _parameter_value(self, name):
+        drafts = getattr(self, "_parameter_drafts", {})
+        if name in drafts:
+            return drafts[name].committed
+        text = self._parameter_variable(name).get()
+        if name == "temperature_schedule":
+            return temperature_values(_TEMPERATURE_VALUES_BY_LABEL.get(text, text))
+        spec = PARAMETERS[name]
+        return numeric_value(name, int(text) if spec.integer else float(text))
+
+    def _initialize_parameter_drafts(self, master=None):
+        master = self.root if master is None else master
+        self._parameter_drafts = {
+            name: ParameterDraft(name, getattr(self.settings, "recognition_" + name))
+            for name in (*PARAMETERS, "temperature_schedule")
+        }
+        self._parameter_inputs = {
+            name: tk.StringVar(master=master, value=draft.current_text)
+            for name, draft in self._parameter_drafts.items()
+        }
+        self._parameter_hints = {name: tk.StringVar(master=master) for name in self._parameter_drafts}
+        self._parameter_widgets = {}
+        self._parameter_hint_labels = {}
+        self._parameter_focus_jobs = set()
+        self._syncing_parameter_input = False
+        for name, variable in self._parameter_inputs.items():
+            variable.trace_add("write", lambda *_, key=name: self._parameter_input_changed(key))
+            self._parameter_variable(name).trace_add(
+                "write", lambda *_, key=name: self._parameter_committed_changed(key))
+            self._refresh_parameter_hint(name)
+
+    def _controls_alive(self):
+        if self._closing or getattr(self, "_exit_requested", False):
+            return False
+        try:
+            return bool(self.root.winfo_exists())
+        except tk.TclError:
+            return False
+
+    def _parameter_help(self, name):
+        if name == "temperature_schedule":
+            text = "每项0–1，1–8项；用逗号分隔。推荐0或0,0.2,0.4。仅Whisper。"
+        else:
+            spec = PARAMETERS[name]
+            kind = "整数" if spec.integer else "数值"
+            details = {
+                "beam_size": "推荐1 / 3 / 5；数值越大通常越耗时。仅Whisper。",
+                "window_seconds": "语音上下文上限；越长越耗时。仅Whisper。",
+                "update_interval": "仅Whisper；CPU实际不低于0.5秒，CUDA不低于0.1秒。",
+                "repetition_penalty": "1不额外惩罚；过高可能漏掉正常重复。仅Whisper。",
+                "no_repeat_ngram_size": "0关闭；非零可能抑制正常重复内容。仅Whisper。",
+                "no_speech_threshold": "过低可能跳过轻声片段。仅Whisper。",
+                "vad_silence_ms": "Whisper / SenseVoice；太短易切碎，数值越大分段越慢。",
+            }
+            text = f"{spec.allowed_text}{kind}。{details[name]}"
+        if not parameter_is_consumed(self.model_var.get(), name):
+            text += " 当前引擎不使用，保留为对应引擎偏好。"
+        return text
+
+    def _refresh_parameter_hint(self, name):
+        if not hasattr(self, "_parameter_drafts"):
+            return
+        draft = self._parameter_drafts[name]
+        text = self._parameter_help(name)
+        if draft.error:
+            text = f"未应用：{draft.error}；当前值{draft.current_text}。{self._parameter_help(name)}"
+        elif draft.dirty:
+            text += f" 输入中，当前值{draft.current_text}；Enter或离开字段应用，Esc还原。"
+        self._parameter_hints[name].set(text)
+        widget = self._parameter_widgets.get(name)
+        label = self._parameter_hint_labels.get(name)
+        if widget is not None:
+            try:
+                if widget.winfo_exists():
+                    widget.state(["invalid"] if draft.error else ["!invalid"])
+            except tk.TclError:
+                pass
+        if label is not None:
+            try:
+                if label.winfo_exists():
+                    label.configure(style="Danger.TLabel" if draft.error else "Muted.TLabel")
+            except tk.TclError:
+                pass
+
+    def _refresh_parameter_hints(self, *_):
+        for name in getattr(self, "_parameter_drafts", {}):
+            self._refresh_parameter_hint(name)
+
+    def _sync_parameter_input(self, name):
+        self._syncing_parameter_input = True
+        try:
+            self._parameter_inputs[name].set(self._parameter_drafts[name].draft_text)
+        finally:
+            self._syncing_parameter_input = False
+        self._refresh_parameter_hint(name)
+
+    def _parameter_input_changed(self, name):
+        if self._syncing_parameter_input or self._closing or getattr(self, "_exit_requested", False):
+            return
+        self._parameter_drafts[name].edit(self._parameter_inputs[name].get())
+        self._refresh_parameter_hint(name)
+
+    def _parameter_committed_changed(self, name):
+        if self._closing or getattr(self, "_exit_requested", False):
+            return
+        text = self._parameter_variable(name).get()
+        try:
+            if name == "temperature_schedule":
+                value = temperature_values(_TEMPERATURE_VALUES_BY_LABEL.get(text, text))
+            else:
+                spec = PARAMETERS[name]
+                value = numeric_value(name, int(text) if spec.integer else float(text))
+        except (ValueError, TypeError) as error:
+            logging.error("Committed recognition parameter invalid: %s", name)
+            self._parameter_drafts[name].error = str(error)
+            self._refresh_parameter_hint(name)
+            return
+        self._parameter_drafts[name].set_committed(value)
+        self._sync_parameter_input(name)
+
+    def _parameter_widget_alive(self, name, owner=None):
+        if not self._controls_alive():
+            return False
+        widget = self._parameter_widgets.get(name)
+        if widget is None or (owner is not None and widget is not owner):
+            return False
+        try:
+            return bool(widget.winfo_exists()) and not widget.instate(["disabled"])
+        except tk.TclError:
+            return False
+
+    def _commit_parameter(self, name, _event=None, owner=None):
+        if not self._parameter_widget_alive(name, owner):
+            return "break"
+        draft = self._parameter_drafts[name]
+        changed = draft.submit()
+        self._sync_parameter_input(name)
+        if changed:
+            text = draft.current_text
+            if name == "temperature_schedule":
+                text = _TEMPERATURE_LABELS.get(text, text)
+            self._parameter_variable(name).set(text)
+        return "break"
+
+    def _cancel_parameter(self, name, _event=None, owner=None):
+        if self._parameter_widget_alive(name, owner):
+            self._parameter_drafts[name].cancel()
+            self._sync_parameter_input(name)
+        return "break"
+
+    def _parameter_focus_out(self, name, _event=None, owner=None):
+        if not self._parameter_widget_alive(name, owner):
+            return
+        widget = self._parameter_widgets[name]
+        token = None
+        def commit_if_outside():
+            self._parameter_focus_jobs.discard(token)
+            if not self._parameter_widget_alive(name, widget):
+                return
+            manager = getattr(self.root, "_shengmu_choices", None)
+            popup = getattr(manager, "popup", None)
+            try:
+                focused = self.root.focus_get()
+                if focused is widget:
+                    return
+                if popup is not None and popup.owner is widget and focused is not None:
+                    top = popup.window
+                    if focused is top or str(focused).startswith(str(top) + "."):
+                        return
+            except tk.TclError:
+                return
+            self._commit_parameter(name, owner=widget)
+        token = self.root.after_idle(commit_if_outside)
+        self._parameter_focus_jobs.add(token)
+
+    def _add_parameter_combo(self, parent, row, name, width=18):
+        draft = self._parameter_drafts[name]
+        self._sync_parameter_input(name)
+        label = "解码温度序列" if name == "temperature_schedule" else PARAMETERS[name].label
+        values = (RECOGNITION_TEMPERATURE_SCHEDULES if name == "temperature_schedule"
+                  else tuple(number_text(value) for value in PARAMETERS[name].recommended))
+        widget = self._add_labeled_combo(parent, row, label, self._parameter_inputs[name],
+                                         values, width=width, readonly=False)
+        self._parameter_widgets[name] = widget
+        widget._shengmu_parameter = True
+        widget._shengmu_choice_value = lambda: draft.current_text
+        widget._shengmu_choice_header = lambda: (
+            f"当前值 {draft.current_text} · " + ("推荐" if draft.current_text in values else "自定义"))
+        widget._shengmu_choice_closed = lambda: self._parameter_focus_out(name, owner=widget)
+        widget.bind("<Return>", lambda event: self._commit_parameter(name, event, owner=widget))
+        widget.bind("<KP_Enter>", lambda event: self._commit_parameter(name, event, owner=widget))
+        widget.bind("<Control-Return>", lambda _event: None)
+        widget.bind("<Escape>", lambda event: self._cancel_parameter(name, event, owner=widget))
+        widget.bind("<FocusOut>", lambda event: self._parameter_focus_out(name, event, owner=widget))
+        widget.bind("<<ComboboxSelected>>", lambda event: self._commit_parameter(name, event, owner=widget))
+        widget.bind("<Destroy>", lambda event: self._parameter_field_destroyed(name, widget)
+                    if event.widget is widget else None, add="+")
+        hint = ttk.Label(parent, textvariable=self._parameter_hints[name], style="Muted.TLabel",
+                         wraplength=620, justify="left")
+        hint.grid(row=row+1, column=1, columnspan=2, sticky="ew", pady=(0,10))
+        self._parameter_hint_labels[name] = hint
+        self._refresh_parameter_hint(name)
+        return widget
+
+    def _parameter_field_destroyed(self, name, widget):
+        if self._parameter_widgets.get(name) is widget:
+            self._parameter_widgets.pop(name, None)
+            self._parameter_hint_labels.pop(name, None)
+            self._parameter_drafts[name].cancel()
+
+    def _effective_parameter_options(self, options):
+        current = getattr(getattr(self, "pipeline", None), "options", None)
+        if current is None or current.model_size != options.model_size:
+            return options
+        inactive = {
+            name: getattr(current, name)
+            for name in (*PARAMETERS, "temperature_schedule", "condition_on_previous_text")
+            if not parameter_is_consumed(options.model_size, name)
+        }
+        return replace(options, **inactive) if inactive else options
+
 
     def _refresh_devices(self) -> None:
         try:
@@ -1023,13 +1305,8 @@ class Application:
         if not audio_device or audio_device not in available_devices:
             self._set_status("音频来源不是当前枚举设备，请刷新设备后重新选择。")
             return None
-        try:
-            beam_size = int(self.beam_size_var.get())
-        except ValueError:
-            beam_size = RECOGNITION_BEAM_SIZES[0]
-        if beam_size not in RECOGNITION_BEAM_SIZES:
-            beam_size = RECOGNITION_BEAM_SIZES[0]
-        return PipelineOptions(
+        beam_size = self._parameter_value("beam_size")
+        options = PipelineOptions(
             source_language=source,
             target_language=target,
             model_size=self.model_var.get(),
@@ -1040,16 +1317,14 @@ class Application:
             translation_enabled=self.translation_enabled_var.get(),
             beam_size=beam_size,
             condition_on_previous_text=self.context_var.get() == "启用",
-            temperature_schedule=_TEMPERATURE_VALUES_BY_LABEL.get(
-                self.temperature_var.get(), "0"
-            ),
-            **{name: type(choices[0])(self.recognition_vars[name].get())
-               for name, choices in RECOGNITION_NUMERIC_OPTIONS.items()},
+            temperature_schedule=temperature_text(self._parameter_value("temperature_schedule")),
+            **{name: self._parameter_value(name) for name in RECOGNITION_NUMERIC_OPTIONS},
         )
+        return self._effective_parameter_options(options)
 
     def _queue_live_configuration(self, *_args) -> None:
         """把连续的界面修改合并，交给识别线程应用。"""
-        if self.pipeline is None or self._closing or getattr(self, "_stopping", False) or getattr(self, "_applying_profile", False):
+        if self.pipeline is None or self._closing or getattr(self, "_exit_requested", False) or getattr(self, "_stopping", False) or getattr(self, "_applying_profile", False):
             return
         if self._live_update_after_id is not None:
             self.root.after_cancel(self._live_update_after_id)
@@ -1058,10 +1333,12 @@ class Application:
     def _apply_live_configuration(self) -> None:
         self._live_update_after_id = None
         pipeline = self.pipeline
-        if pipeline is None or getattr(self, "_stopping", False):
+        if self._closing or getattr(self, "_exit_requested", False) or pipeline is None or getattr(self, "_stopping", False):
             return
         options = self._pipeline_options_from_ui()
         if options is None:
+            return
+        if options == pipeline.options and not getattr(getattr(self, "_display", None), "awaiting_translation_context", False):
             return
         translation_changed = any(
             getattr(pipeline.options, key) != getattr(options, key)
@@ -1175,7 +1452,8 @@ class Application:
         self._schedule_settings_save()
 
     def _show_overlay(self) -> None:
-        self.overlay.show()
+        if not self._closing and not getattr(self, "_exit_requested", False):
+            self.overlay.show()
 
     def _queue_overlay_focus(self, _event=None) -> None:
         if self._closing:
@@ -1197,8 +1475,129 @@ class Application:
         except (tk.TclError, KeyError):
             pass
 
+    def _initialize_mouse_passthrough(self, master=None):
+        master = self.root if master is None else master
+        self._controls_thread_id = threading.get_ident()
+        self._mouse_passthrough_committed = self.settings.overlay_mouse_passthrough
+        self._mouse_passthrough_effective = None
+        self._mouse_passthrough_initialized = False
+        self._mouse_passthrough_startup_failed = False
+        self._mouse_passthrough_owner = None
+        self._mouse_passthrough_request = None
+        self.mouse_passthrough_var = tk.IntVar(master=master, value=-1)
+        self.mouse_passthrough_status_var = tk.StringVar(master=master, value="尚未确认鼠标操作状态。")
+
+    def _sync_mouse_passthrough_control(self):
+        widget = getattr(self, "mouse_passthrough_check", None)
+        if widget is None or not self._controls_alive():
+            return
+        try:
+            if widget.winfo_exists():
+                effective = self._mouse_passthrough_effective
+                widget.state(["alternate", "!selected"] if effective is None else
+                             ["!alternate", "selected" if effective else "!selected"])
+        except tk.TclError:
+            pass
+
+    def _layout_mouse_controls(self, _event=None):
+        if not self._controls_alive():
+            return
+        frame = self._mouse_passthrough_frame
+        try:
+            if not frame.winfo_exists():
+                return
+            stacked = (self.mouse_passthrough_check.winfo_reqwidth()
+                       + self._mouse_restore_button.winfo_reqwidth()+32 > frame.winfo_width())
+            if stacked == getattr(self, "_mouse_controls_stacked", None):
+                return
+            self._mouse_controls_stacked = stacked
+            self._mouse_restore_button.grid_configure(row=1 if stacked else 0, column=0 if stacked else 1,
+                                                       columnspan=2 if stacked else 1,
+                                                       sticky="w" if stacked else "e", pady=(8,0) if stacked else 0)
+            self._mouse_status_label.grid_configure(row=2 if stacked else 1)
+            self._mouse_help_label.grid_configure(row=3 if stacked else 2)
+        except tk.TclError:
+            pass
+
+    def _connect_mouse_passthrough(self):
+        owner = self.overlay
+        self._mouse_passthrough_owner = owner
+        owner.on_mouse_passthrough_changed = lambda result: self._mouse_passthrough_changed(owner, result)
+
+    def _start_mouse_passthrough(self):
+        if not self._controls_alive():
+            return
+        # The settings restore button already exists, and tray setup has run.
+        # Keep the taskbar settings entry reachable when no tray is available.
+        self._mouse_passthrough_initialized = True
+        self._request_mouse_passthrough(self._mouse_passthrough_committed)
+
+    def _on_mouse_passthrough_toggle(self):
+        if self._controls_alive():
+            self._request_mouse_passthrough(self.mouse_passthrough_var.get() == 1)
+
+    def _restore_mouse_operation(self):
+        self._request_mouse_passthrough(False)
+
+    def _request_mouse_passthrough(self, enabled):
+        if (threading.get_ident() != self._controls_thread_id or not self._controls_alive()
+                or type(enabled) is not bool):
+            return
+        owner = getattr(self, "overlay", None)
+        if owner is not self._mouse_passthrough_owner:
+            return
+        # The native setter publishes synchronously; only the callback commits.
+        request = (owner, enabled)
+        self._mouse_passthrough_request = request
+        try:
+            owner.set_mouse_passthrough(enabled)
+        finally:
+            if self._mouse_passthrough_request is request:
+                self._mouse_passthrough_request = None
+
+    def _mouse_passthrough_changed(self, owner, result):
+        if (threading.get_ident() != self._controls_thread_id or not self._controls_alive()
+                or owner is not getattr(self, "overlay", None)
+                or owner is not self._mouse_passthrough_owner):
+            return
+        effective = result.effective
+        if effective is not None and type(effective) is not bool:
+            return
+        self._mouse_passthrough_effective = effective
+        self.mouse_passthrough_var.set(-1 if effective is None else int(effective))
+        self._sync_mouse_passthrough_control()
+        request = self._mouse_passthrough_request
+        explicit = request is not None and request[0] is owner and request[1] is result.requested
+        if (explicit and result.success
+                and type(result.requested) is bool and effective is result.requested):
+            changed = self._mouse_passthrough_committed is not effective
+            self._mouse_passthrough_committed = effective
+            self.settings.overlay_mouse_passthrough = effective
+            if changed:
+                self._schedule_settings_save()
+        if effective is True:
+            text = "已穿透：鼠标直接操作下方窗口。请从本页或托盘恢复鼠标操作。"
+        elif effective is False:
+            text = "可操作：字幕窗支持拖动、右键菜单和历史滚动。"
+        else:
+            text = "状态未确认：请点“恢复鼠标操作”重新核实；保存偏好保持不变。"
+        if not result.success:
+            self._mouse_passthrough_startup_failed = True
+            text = "切换未成功。" + text
+            if effective is not None:
+                text += " 保存偏好保持不变。"
+            self._show_settings()
+            self._set_status("字幕窗鼠标状态未按请求确认，可在字幕外观页恢复鼠标操作。")
+        self.mouse_passthrough_status_var.set(text)
+
+    def _hide_settings_on_startup(self):
+        if self._controls_alive() and not self._mouse_passthrough_startup_failed:
+            self._hide_settings()
+
     def _hide_settings(self) -> None:
         """关闭设置窗＝隐藏；识别和悬浮窗继续运行。"""
+        if self._closing or getattr(self, "_exit_requested", False):
+            return
         self._schedule_settings_save()
         self.overlay.set_configuration_active(False)
         try:
@@ -1215,6 +1614,8 @@ class Application:
             self.root.after_idle(self._hide_settings)
 
     def _show_settings(self) -> None:
+        if self._closing or getattr(self, "_exit_requested", False):
+            return
         self.root.deiconify()
         self.root.lift()
         self._queue_overlay_focus()
@@ -1237,20 +1638,16 @@ class Application:
         self.settings.target_language = self.target_var.get()
         self.settings.recognition_model = self.model_var.get()
         self.settings.recognition_device = self.device_var.get()
-        try:
-            self.settings.recognition_beam_size = int(self.beam_size_var.get())
-        except ValueError:
-            self.settings.recognition_beam_size = RECOGNITION_BEAM_SIZES[0]
+        self.settings.recognition_beam_size = self._parameter_value("beam_size")
         self.settings.recognition_condition_on_previous_text = self.context_var.get() == "启用"
-        self.settings.recognition_temperature_schedule = _TEMPERATURE_VALUES_BY_LABEL.get(
-            self.temperature_var.get(), "0"
-        )
-        for name, choices in RECOGNITION_NUMERIC_OPTIONS.items():
-            setattr(self.settings, "recognition_" + name, type(choices[0])(self.recognition_vars[name].get()))
+        self.settings.recognition_temperature_schedule = temperature_text(self._parameter_value("temperature_schedule"))
+        for name in RECOGNITION_NUMERIC_OPTIONS:
+            setattr(self.settings, "recognition_" + name, self._parameter_value(name))
         self.settings.model_path = self.model_path_var.get()
         self.settings.loopback_device = self.audio_device_var.get()
         self.settings.auto_start = self.auto_start_var.get()
         self.settings.start_minimized = self.start_minimized_var.get()
+        self.settings.overlay_mouse_passthrough = getattr(self, "_mouse_passthrough_committed", self.settings.overlay_mouse_passthrough)
         self.settings.show_runtime_details = self._runtime_details_preference
         self.settings.translation_enabled = self.translation_enabled_var.get()
         self.settings.translation_backend = self.translation_var.get()
@@ -1265,7 +1662,7 @@ class Application:
 
     def _schedule_settings_save(self, *_args) -> None:
         """设置变更后防抖保存，避免每次拖动都写盘。"""
-        if getattr(self, "_applying_profile", False):
+        if self._closing or getattr(self, "_exit_requested", False) or getattr(self, "_applying_profile", False):
             return
         if getattr(self, "_settings_save_after_id", None) is not None:
             try:
@@ -1279,7 +1676,7 @@ class Application:
 
     def _settings_save_debounced(self) -> None:
         self._settings_save_after_id = None
-        if self._closing:
+        if self._closing or getattr(self, "_exit_requested", False):
             return
         try:
             self._save_settings()
@@ -1292,7 +1689,7 @@ class Application:
             self.runtime_guidance_var.set(compact_status(text))
 
     def _post(self, callback, *args) -> None:
-        if not self._closing:
+        if not self._closing and not getattr(self, "_exit_requested", False):
             self._events.put((callback, args))
 
     def _dispatch_session(self, session, callback, *args) -> None:
@@ -1312,13 +1709,16 @@ class Application:
                     callback, args = self._events.get_nowait()
                 except queue.Empty:
                     break
+                if self._closing or getattr(self, "_exit_requested", False):
+                    break
                 callback(*args)
         finally:
             self._in_event_drain = False
             # 一个定时批次只提交一次悬浮窗快照，避免识别频率直接决定重绘频率。
-            self._flush_display()
-            if not self._closing:
-                self._drain_after_id = self.root.after(10, self._drain_events)
+            if not self._closing and not getattr(self, "_exit_requested", False):
+                self._flush_display()
+                if not self._closing and not getattr(self, "_exit_requested", False):
+                    self._drain_after_id = self.root.after(10, self._drain_events)
 
     def _flush_display(self) -> None:
         """将显示模块的脏状态一次性提交给主窗口和悬浮窗。"""
@@ -1356,6 +1756,23 @@ class Application:
         if self._closing:
             return
         self._closing = True
+        self._exit_requested = True
+        for token in getattr(self, "_label_wrap_jobs", {}).values():
+            try:
+                self.root.after_cancel(token)
+            except tk.TclError:
+                pass
+        getattr(self, "_label_wrap_jobs", {}).clear()
+        if getattr(self, "overlay", None) is getattr(self, "_mouse_passthrough_owner", None):
+            self.overlay.on_mouse_passthrough_changed = None
+        for token in getattr(self, "_parameter_focus_jobs", set()).copy():
+            try:
+                self.root.after_cancel(token)
+            except tk.TclError:
+                pass
+        getattr(self, "_parameter_focus_jobs", set()).clear()
+        for draft in getattr(self, "_parameter_drafts", {}).values():
+            draft.cancel()
         if self._overlay_focus_after_id is not None:
             self.root.after_cancel(self._overlay_focus_after_id)
             self._overlay_focus_after_id = None

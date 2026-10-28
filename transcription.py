@@ -18,7 +18,7 @@ from model_manager import (
     model_cache_hint as managed_model_cache_hint,
 )
 from runtime_components import nvidia_driver_available, prepare_component
-from settings import RECOGNITION_BEAM_SIZES
+from recognition_parameters import numeric_value, temperature_values
 from text_processing import remove_subtitle_credit, subtitle_credit_spans
 
 
@@ -74,19 +74,7 @@ class RecognitionResult:
 
 def _temperature_values(value: str | tuple[float, ...] | list[float]) -> tuple[float, ...]:
     """把界面保存的温度序列转换为 faster-whisper 可接受的数值。"""
-    if isinstance(value, (tuple, list)):
-        raw_values = value
-    else:
-        raw_values = value.split(",")
-    temperatures = []
-    for raw_value in raw_values:
-        try:
-            temperature = min(1.0, max(0.0, float(raw_value)))
-        except (TypeError, ValueError):
-            continue
-        if temperature not in temperatures:
-            temperatures.append(temperature)
-    return tuple(temperatures) or (0.0,)
+    return temperature_values(value)
 
 
 class WhisperRecognizer:
@@ -227,10 +215,12 @@ class WhisperRecognizer:
         if self._model is None:
             raise RuntimeError("语音模型尚未加载")
         language = source_language or None
-        selected_beam_size = (
-            beam_size if beam_size in RECOGNITION_BEAM_SIZES else RECOGNITION_BEAM_SIZES[0]
-        )
+        selected_beam_size = numeric_value("beam_size", beam_size)
         temperatures = _temperature_values(temperature_schedule)
+        repetition_penalty = numeric_value("repetition_penalty", repetition_penalty)
+        no_repeat_ngram_size = numeric_value("no_repeat_ngram_size", no_repeat_ngram_size)
+        no_speech_threshold = numeric_value("no_speech_threshold", no_speech_threshold)
+        vad_silence_ms = numeric_value("vad_silence_ms", vad_silence_ms)
         if realtime:
             # 即时草稿只负责尽快显示当前文字；完整识别负责词时间、标点和更准确的结果。
             transcribe_options = {

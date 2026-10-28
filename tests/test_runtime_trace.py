@@ -189,6 +189,7 @@ class RuntimeTraceTests(unittest.TestCase):
         overlay._configuration_active = False
         overlay._settings_master = object()
         overlay._request_redraw = lambda: None
+        overlay._layer = SimpleNamespace(refresh_mouse_passthrough=lambda: None)
         overlay.window = SimpleNamespace(wm_attributes=lambda *args: calls.append(args),
                                          winfo_ismapped=lambda: True, lower=lambda target: None)
         overlay.set_configuration_active(True)

@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import os
+import logging
+import threading
 import time
 import tkinter as tk
 from tkinter import messagebox
@@ -14,7 +16,7 @@ from functools import lru_cache
 
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
-from layered_window import LayeredWindow
+from layered_window import LayeredWindow, MousePassthroughResult
 from theme import reduced_motion, palette
 from screen_bounds import Rect, parse_geometry, constrain, monitor_areas
 from subtitle_layout import (
@@ -53,6 +55,10 @@ class OverlayWindow:
     corner_radius = 14
 
     def __init__(self, master: tk.Misc, settings, on_open_settings, on_close) -> None:
+        self._closed = False
+        self._tk_thread_id = threading.get_ident()
+        self.on_mouse_passthrough_changed = None
+        self._mouse_passthrough_result = None
         self.settings = settings
         self._configuration_active = False
         self._reduced_motion = reduced_motion()
@@ -131,6 +137,7 @@ class OverlayWindow:
         self.text_canvas = self.canvas
         self.window.update_idletasks()
         self._layer = LayeredWindow(self.window)
+        self._layer.on_mouse_passthrough_changed = self._publish_mouse_passthrough
         self._fonts = {}
 
         # 记录用户选定的阅读区高度，不追随段落长度变化。
@@ -153,6 +160,7 @@ class OverlayWindow:
             canvas.bind("<Button-5>", self._on_mouse_wheel)
             canvas.bind("<Button-3>", self._show_menu)
         self.window.bind("<Configure>", self._on_configure)
+        self.window.bind("<Map>", self._on_map, add="+")
 
         self._menu = tk.Menu(self.window, tearoff=False)
         self._menu.add_command(label="打开设置窗口", command=self._on_open_settings)
@@ -163,6 +171,77 @@ class OverlayWindow:
         self._menu.add_command(label="退出程序", command=self._on_close)
         self._set_bounded_geometry(self._requested_rect)
         self._screen_poll_after_id = self.window.after(350, self._poll_screen_bounds)
+
+    @property
+    def mouse_passthrough(self):
+        """Verified native state, separate from the saved user preference."""
+        result = getattr(self, "_mouse_passthrough_result", None)
+        return result.effective if result is not None else None
+
+    def _publish_mouse_passthrough(self, result):
+        if getattr(self, "_closed", False):
+            return
+        self._mouse_passthrough_result = result
+        callback = self.on_mouse_passthrough_changed
+        if callback is not None:
+            try:
+                callback(result)
+            except Exception:
+                logging.getLogger(__name__).exception("Overlay mouse passthrough callback failed")
+
+    def _release_owned_pointer(self):
+        try:
+            current = self.window.grab_current()
+            owned = {self.window, self.canvas, self.text_canvas, self._menu}
+            if current is not None and (current in owned or current.winfo_toplevel() is self.window):
+                current.grab_release()
+        finally:
+            self._layer.release_owned_capture()
+
+    def _cancel_pointer_interaction(self):
+        # Do not snap reading motions or change follow-tail/scroll targets.
+        self._drag_mode = ""
+        self._grip_hover = False
+        self._scrollbar_show_until = 0.0
+        try:
+            self._menu.unpost()
+            self.canvas.configure(cursor="")
+        finally:
+            self._release_owned_pointer()
+
+    def set_mouse_passthrough(self, enabled):
+        """Apply on the Tk thread; callback and return share the same result."""
+        if (getattr(self, "_closed", False)
+                or threading.get_ident() != self._tk_thread_id):
+            return MousePassthroughResult(False, enabled, self.mouse_passthrough,
+                                          "mouse_passthrough_unavailable")
+        if type(enabled) is not bool:
+            return MousePassthroughResult(False, False, self.mouse_passthrough,
+                                          "mouse_passthrough_requires_bool")
+        if enabled:
+            try:
+                self._cancel_pointer_interaction()
+            except Exception as error:
+                result = MousePassthroughResult(False, enabled, self.mouse_passthrough,
+                                              "mouse_passthrough_pointer_cleanup_failed: " + str(error))
+                self._publish_mouse_passthrough(result)
+                return result
+        return self._layer.set_mouse_passthrough(enabled)
+
+    def _refresh_mouse_passthrough(self):
+        if not getattr(self, "_closed", False):
+            return self._layer.refresh_mouse_passthrough()
+
+    def _on_map(self, event):
+        if event.widget is self.window:
+            self._refresh_mouse_passthrough()
+
+    def _mouse_input_blocked(self):
+        if getattr(self, "_closed", False):
+            return True
+        # Legacy object-only render fixtures have no native state; real windows do.
+        result = getattr(self, "_mouse_passthrough_result", None)
+        return hasattr(self, "_mouse_passthrough_result") and (result is None or result.effective is not False)
 
     def _current_rect(self):
         if self.window.winfo_ismapped():
@@ -197,22 +276,22 @@ class OverlayWindow:
 
     def _finish_bounds_check(self):
         self._bounds_after_id=None
-        self._enforce_bounds()
+        if not getattr(self, "_closed", False):
+            self._enforce_bounds()
 
     def _queue_bounds_check(self):
-        if self._bounds_after_id is None:
+        if not getattr(self, "_closed", False) and self._bounds_after_id is None:
             self._bounds_after_id=self.window.after_idle(self._finish_bounds_check)
 
     def _poll_screen_bounds(self):
         self._screen_poll_after_id=None
-        if not self.window.winfo_exists():
+        if getattr(self, "_closed", False) or not self.window.winfo_exists():
             return
         preference = reduced_motion()
         if preference != getattr(self, "_reduced_motion", preference):
             self._reduced_motion = preference
             if preference:
-                self._scroll_motion.snap(self._scroll_target)
-                self._trans_scroll_motion.snap(self._trans_scroll_target)
+                self._stop_reading_animation()
                 self._request_redraw()
         signature=(monitor_areas(self.window),self.window.winfo_fpixels('1i'))
         if signature!=self._screen_signature:
@@ -296,8 +375,15 @@ class OverlayWindow:
 
     def show(self) -> None:
         """显示悬浮窗。"""
+        if getattr(self, "_closed", False):
+            return
         self._set_bounded_geometry(self._current_rect())
-        self.window.deiconify()
+        self._refresh_mouse_passthrough()
+        if self.mouse_passthrough is not False:
+            # Tk wm state normal maps without deiconify's forced raise/focus.
+            self.window.state("normal")
+        else:
+            self.window.deiconify()
         if self._separate_layers:
             self.text_window.deiconify()
             self.text_window.lift(self.window)
@@ -317,6 +403,7 @@ class OverlayWindow:
         self._configuration_active = active
         try:
             self.window.wm_attributes("-topmost", bool(self.settings.overlay_topmost and not active))
+            self._refresh_mouse_passthrough()
             if active and self.window.winfo_ismapped():
                 self.window.lower(self._settings_master)
         except tk.TclError:
@@ -338,8 +425,12 @@ class OverlayWindow:
 
     def hide(self) -> None:
         """隐藏悬浮窗。"""
+        if getattr(self, "_closed", False):
+            return
+        self._cancel_pointer_interaction()
         self.persist_geometry()
         self._cancel_auto_scroll()
+        self._stop_reading_animation(cancel_redraw=True)
         if self._separate_layers:
             self.text_window.withdraw()
         self.window.withdraw()
@@ -488,15 +579,29 @@ class OverlayWindow:
 
     def apply_settings(self) -> None:
         """应用颜色、两层透明度、字号和置顶设置。"""
+        if getattr(self, "_closed", False):
+            return
+        if not self._animations_enabled:
+            self._stop_reading_animation()
         self.window.wm_attributes("-topmost", bool(self.settings.overlay_topmost
                                                   and not self._configuration_active))
+        self._refresh_mouse_passthrough()
         self._layout_cache_key = None
         self._request_redraw()
 
     def close(self) -> None:
         """销毁悬浮窗。"""
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        self.on_mouse_passthrough_changed = None
         if self.window.winfo_exists():
             self.persist_geometry()
+            try:
+                self._cancel_pointer_interaction()
+            except Exception:
+                logging.getLogger(__name__).debug("Overlay pointer cleanup failed during close", exc_info=True)
+            self._layer.close()
             self._cancel_auto_scroll()
             self._cancel_lane_idle_check()
             for name in ("_bounds_after_id", "_screen_poll_after_id"):
@@ -504,23 +609,39 @@ class OverlayWindow:
                 if token is not None:
                     self.window.after_cancel(token)
                     setattr(self,name,None)
-            if self._animation_after is not None:
-                self.window.after_cancel(self._animation_after)
-                self._animation_after = None
-            if self._redraw_after is not None:
-                self.window.after_cancel(self._redraw_after)
-                self._redraw_after = None
+            self._stop_reading_animation(cancel_redraw=True)
             if self._separate_layers and self.text_window.winfo_exists():
                 self.text_window.destroy()
             self.window.destroy()
+        else:
+            self._layer.close()
 
     # ------------------------------------------------------------------
     # 重绘与动画
     # ------------------------------------------------------------------
 
+    def _stop_reading_animation(self, *, cancel_redraw=False) -> None:
+        """Settle existing targets and cancel only this overlay's frame callbacks."""
+        for motion_name, target_name in (("_scroll_motion", "_scroll_target"),
+                                         ("_trans_scroll_motion", "_trans_scroll_target")):
+            motion = getattr(self, motion_name, None)
+            if motion is not None:
+                motion.snap(getattr(self, target_name, motion.target))
+        token = getattr(self, "_animation_after", None)
+        if token is not None:
+            self.window.after_cancel(token)
+            self._animation_after = None
+        if cancel_redraw:
+            token = getattr(self, "_redraw_after", None)
+            if token is not None:
+                self.window.after_cancel(token)
+                self._redraw_after = None
+            self._redraw_pending = False
+
     def _request_redraw(self) -> None:
         """把多个后台结果合并为一帧重绘；动画期间由动画循环接管。"""
-        if not self.window.winfo_exists() or not self.window.winfo_viewable():
+        if (getattr(self, "_closed", False) or not self.window.winfo_exists()
+                or not self.window.winfo_viewable()):
             return
         self._ensure_animation_loop()
         if self._animation_after is not None or self._redraw_pending:
@@ -536,6 +657,12 @@ class OverlayWindow:
 
     def _ensure_animation_loop(self) -> None:
         """存在未完成的过渡时驱动动画循环；结束后自动停机。"""
+        if (getattr(self, "_closed", False) or not self.window.winfo_exists()
+                or not self.window.winfo_viewable()):
+            return
+        if not self._animations_enabled:
+            self._stop_reading_animation()
+            return
         if self._animation_after is None and self._has_active_animation(time.perf_counter()):
             self._animation_after = self.window.after(self.frame_interval_ms, self._animation_tick)
 
@@ -544,7 +671,12 @@ class OverlayWindow:
 
     def _animation_tick(self) -> None:
         self._animation_after = None
-        if not self.window.winfo_exists():
+        if (getattr(self, "_closed", False) or not self.window.winfo_exists()
+                or not self.window.winfo_viewable()):
+            return
+        if not self._animations_enabled:
+            self._stop_reading_animation()
+            self._redraw()
             return
         self._advance_motions(time.perf_counter())
         self._redraw()
@@ -559,7 +691,8 @@ class OverlayWindow:
     def _redraw(self) -> None:
         """固定用户选定的窗口宽度与字号，内容按当前动画状态合成。"""
         if (
-            not self.window.winfo_exists()
+            getattr(self, "_closed", False)
+            or not self.window.winfo_exists()
             or not self.window.winfo_viewable()
             or self.canvas.winfo_width() <= 1
         ):
@@ -1023,7 +1156,7 @@ class OverlayWindow:
         self._scroll_target = max(0.0, min(float(self._scroll_target), max_scroll))
         if self._scroll_motion.value > max_scroll:
             self._scroll_motion.snap(max_scroll)
-        self._scroll_motion.set_target(self._scroll_target)
+        self._scroll_motion.set_target(self._scroll_target, instant=not self._animations_enabled)
 
     def _full_tail_offset(self) -> float:
         return max(
@@ -1053,6 +1186,8 @@ class OverlayWindow:
         self._request_redraw()
 
     def _on_button_press(self, event) -> None:
+        if self._mouse_input_blocked():
+            return
         self._drag_origin = (event.x_root, event.y_root)
         self._geometry_origin = (
             self.window.winfo_width(),
@@ -1075,12 +1210,12 @@ class OverlayWindow:
             self._user_resized = True
         else:
             self._drag_mode = "move"
-        try:
-            self.canvas.grab_set()
-        except tk.TclError:
-            pass
+        # Tk already captured this button press. Preserve its restrict window
+        # so motion across per-pixel transparent pixels still reaches Canvas.
 
     def _on_drag(self, event) -> None:
+        if self._mouse_input_blocked():
+            return
         if not self._drag_mode:
             return
         if self._drag_mode == "scrollbar":
@@ -1099,6 +1234,8 @@ class OverlayWindow:
                                        pointer=(event.x_root,event.y_root))
 
     def _on_button_release(self, _event) -> None:
+        if self._mouse_input_blocked():
+            return
         resized = self._drag_mode == "resize"
         scrolling = self._drag_mode == "scrollbar"
         self._drag_mode = ""
@@ -1126,6 +1263,8 @@ class OverlayWindow:
         self._request_redraw()
 
     def _on_motion(self, event) -> None:
+        if self._mouse_input_blocked():
+            return
         bar = self._scrollbar_geometry()
         tail = self._full_tail_offset()
         near_bar = (
@@ -1152,6 +1291,8 @@ class OverlayWindow:
 
     def _on_mouse_wheel(self, event) -> None:
         """上下栏共用一条滚动：滚轮整页同步移动。"""
+        if self._mouse_input_blocked():
+            return
         self._reveal_scrollbar()
         tail = self._full_tail_offset()
         if tail <= 0:
@@ -1174,6 +1315,8 @@ class OverlayWindow:
         self._request_redraw()
 
     def _on_configure(self, _event) -> None:
+        if getattr(self, "_closed", False):
+            return
         if _event.widget is self.window:
             self._queue_bounds_check()
         self._sync_layer_geometry()
@@ -1191,6 +1334,8 @@ class OverlayWindow:
             self.text_window.geometry(geometry)
 
     def _show_menu(self, event) -> None:
+        if self._mouse_input_blocked():
+            return
         try:
             self._menu.tk_popup(event.x_root, event.y_root)
         finally:

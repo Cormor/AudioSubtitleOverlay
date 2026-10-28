@@ -1,4 +1,4 @@
-"""Readable, keyboard-accessible popups for existing readonly ttk.Comboboxes.
+"""Readable popups for readonly choices and opted-in numeric editors.
 
 The combobox remains the value owner.  This module replaces only its popdown,
 so textvariables, current(), postcommand and ComboboxSelected keep their meaning.
@@ -238,7 +238,12 @@ class ChoicePopup:
 
     def __init__(self, manager, owner, values, keyboard):
         self.manager, self.owner, self.values = manager, owner, tuple(values)
-        self.selected_index = owner.current()
+        self._parameter = bool(vars(owner).get("_shengmu_parameter", False))
+        read_current = vars(owner).get("_shengmu_choice_value")
+        current = read_current() if callable(read_current) else None
+        self.selected_index = (self.values.index(current) if current in self.values else -1) if callable(read_current) else owner.current()
+        read_header = vars(owner).get("_shengmu_choice_header")
+        self._header_text = read_header() if callable(read_header) else ""
         self.active_index = max(0, self.selected_index) if values else -1
         self.keyboard = keyboard
         self.hover_index = None
@@ -269,12 +274,18 @@ class ChoicePopup:
                       owner.winfo_width(), owner.winfo_height())
         # Up to 560 Tk pixels keeps long labels readable without turning a short
         # language selector into a full-width menu. Narrow screens wrap further.
-        natural = max((self._font.measure(value) for value in values), default=0) + 68
+        natural = max((self._font.measure(value) for value in values), default=0) + (116 if self._parameter else 68)
+        if self._header_text:
+            natural = max(natural, min(self._font.measure(self._header_text) + 24, 560))
         width = min(work.width, max(anchor.width, min(natural, 560)))
-        self.rows = layout_rows(values, max(1, width - 80),
+        if self._header_text and self._font.measure(self._header_text) > width - 24:
+            self._header_text = "当前值：自定义（完整值见输入框）"
+        self._header_lines = wrap_text(self._header_text, max(1, width-24), self._font.measure) if self._header_text else ()
+        self._header_height = (len(self._header_lines) * self._font.metrics("linespace") + 12) if self._header_lines else 0
+        self.rows = layout_rows(values, max(1, width - (128 if self._parameter else 80)),
                                 self._font.metrics("linespace"), self._font.measure)
         self.total_height = self.rows[-1].bottom if self.rows else 0
-        desired_height = min(self.total_height, self.row_height * 8) + 12
+        desired_height = min(self.total_height, self.row_height * 8) + 12 + self._header_height
         self.placement = place_popup(anchor, width, desired_height, work)
         self.window = tk.Toplevel(owner, takefocus=False)
         self.window.withdraw()
@@ -297,19 +308,22 @@ class ChoicePopup:
                  self.placement.height - 2, radius=8,
                  fill=manager.palette["surfaceRaised"],
                  outline=manager.palette.get("controlBorder", manager.palette["border"]), width=1)
-        self.viewport = max(1, self.placement.height - 12)
+        if self._header_lines:
+            self._shell.create_text(12, 6, text="\n".join(self._header_lines), font=self._font,
+                                    fill=manager.palette["accent"], anchor="nw", justify="left")
+        self.viewport = max(1, self.placement.height - 12 - self._header_height)
         scrolling = self.total_height > self.viewport
         self._canvas_width = max(1, self.placement.width - 12 - (16 if scrolling else 0))
         self.canvas = tk.Canvas(self.window, highlightthickness=0, bd=0,
                                 background=manager.palette["surfaceRaised"], takefocus=True,
                                 yscrollincrement=1)
-        self.canvas.place(x=6, y=6, width=self._canvas_width, height=self.viewport)
+        self.canvas.place(x=6, y=6+self._header_height, width=self._canvas_width, height=self.viewport)
         self.canvas.configure(scrollregion=(0, 0, self._canvas_width, self.total_height))
         self.scrollbar = None
         if scrolling:
             self.scrollbar = ttk.Scrollbar(self.window, orient="vertical", command=self.canvas.yview,
                                            takefocus=False)
-            self.scrollbar.place(x=self.placement.width - 20, y=6, width=14, height=self.viewport)
+            self.scrollbar.place(x=self.placement.width - 20, y=6+self._header_height, width=14, height=self.viewport)
             self.canvas.configure(yscrollcommand=self.scrollbar.set)
         # Tk on Windows emits Enter without Motion on the first crossing.
         # Update the entered row immediately, including a warped pointer.
@@ -381,6 +395,9 @@ class ChoicePopup:
             self.canvas.create_text(38, (row.top + row.bottom) / 2,
                                     text="\n".join(row.lines), font=self._font,
                                     fill=p["text"], anchor="w", justify="left")
+            if self._parameter:
+                self.canvas.create_text(self._canvas_width - 10, (row.top + row.bottom) / 2,
+                                        text="推荐", font=self._font, fill=p["textMuted"], anchor="e")
             if self.keyboard and index == self.active_index:
                 _rounded(self.canvas, 2, row.top + 2, self._canvas_width - 2,
                          row.bottom - 2, radius=4, fill="", outline=p["focus"], width=2)
@@ -602,11 +619,27 @@ class ChoicePopupManager:
     def _readonly(combo):
         return isinstance(combo, ttk.Combobox) and combo.instate(["readonly"])
 
+    @staticmethod
+    def _editable(combo):
+        return isinstance(combo, ttk.Combobox) and bool(vars(combo).get("_shengmu_parameter", False))
+
+    def _managed(self, combo):
+        return self._readonly(combo) or self._editable(combo)
+
     def _press(self, event):
-        if not self._readonly(event.widget):
+        if not self._managed(event.widget):
             return None
         if event.widget.instate(["disabled"]):
             return "break"
+        if self._editable(event.widget):
+            # Existing24px arrow +6px padding +4px inset, full field height.
+            arrow = event.x >= event.widget.winfo_width() - 34
+            if not arrow:
+                element = str(event.widget.identify(event.x, event.y))
+                if element.endswith("textarea"):
+                    return None
+                event.widget.focus_set()
+                return "break"
         if self.popup is not None and self.popup.owner is event.widget:
             self.dismiss()
         else:
@@ -614,17 +647,18 @@ class ChoicePopupManager:
         return "break"
 
     def _key(self, event):
-        if not self._readonly(event.widget):
+        if not self._managed(event.widget):
             return None
         if event.widget.instate(["disabled"]):
             return "break"
-        if event.keysym in ("F4", "Down", "Up", "space", "Return", "KP_Enter"):
+        keys = ("F4", "Down", "Up") if self._editable(event.widget) else ("F4", "Down", "Up", "space", "Return", "KP_Enter")
+        if event.keysym in keys:
             self.post(event.widget, keyboard=True)
             return "break"
         return None
 
     def post(self, combo, keyboard=False):
-        if self._posting or not self._readonly(combo) or combo.instate(["disabled"]):
+        if self._posting or not self._managed(combo) or combo.instate(["disabled"]):
             return None
         self.dismiss(restore_focus=False)
         self._posting = True
@@ -661,6 +695,9 @@ class ChoicePopupManager:
         popup, self.popup = self.popup, None
         if popup is not None:
             popup.close(restore_focus)
+            closed = vars(popup.owner).get("_shengmu_choice_closed")
+            if callable(closed):
+                closed()
 
     def commit(self, popup, index):
         if self.popup is not popup or not 0 <= index < len(popup.values):

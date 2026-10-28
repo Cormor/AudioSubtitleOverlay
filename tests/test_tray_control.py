@@ -8,6 +8,7 @@ from tray_control import TrayController
 
 class FakeItem:
     def __init__(self,label,action,**kwargs):
+        self.label=label
         self.action=action
         self.enabled=kwargs.get("enabled",lambda _:True)
 
@@ -57,3 +58,41 @@ class TrayTests(unittest.TestCase):
         with patch.dict(sys.modules,{"pystray":backend}),self.assertLogs(level="ERROR"):
             tray.start()
         self.assertFalse(tray.available)
+
+
+class TrayMouseRecoveryTests(unittest.TestCase):
+    def controller(self, queued, called):
+        actions={name:lambda n=name:called.append(n) for name in
+                 ("show_settings","show_overlay","hide_overlay","start","stop","close","restore_mouse")}
+        return TrayController(queued.append, **actions)
+
+    def test_recovery_is_an_external_queued_command_and_late_actions_are_ignored(self):
+        queued, called = [], []
+        tray=self.controller(queued, called)
+        backend=SimpleNamespace(Icon=FakeIcon,Menu=FakeMenu,MenuItem=FakeItem)
+        with patch.dict(sys.modules,{"pystray":backend}): tray.start()
+        icon=tray._icon
+        recovery=next(item for item in icon.menu.items if getattr(item,"label",None)=="恢复鼠标操作")
+        recovery.action(icon,None)
+        self.assertFalse(called)
+        queued.pop()()
+        self.assertEqual(called,["restore_mouse"])
+        recovery.action(icon,None)
+        tray.close()
+        queued.pop()()
+        recovery.action(icon,None)
+        self.assertEqual(called,["restore_mouse"])
+        self.assertFalse(queued)
+
+    def test_late_ready_cannot_make_a_closed_or_replaced_tray_available(self):
+        tray=self.controller([],[])
+        backend=SimpleNamespace(Icon=FakeIcon,Menu=FakeMenu,MenuItem=FakeItem)
+        with patch.dict(sys.modules,{"pystray":backend}): tray.start()
+        icon=tray._icon
+        tray.close()
+        icon.visible=False
+        tray._on_ready(icon)
+        self.assertFalse(icon.visible)
+        self.assertFalse(tray.available)
+        with patch.dict(sys.modules,{"pystray":backend}): tray.start()
+        self.assertIsNone(tray._icon)

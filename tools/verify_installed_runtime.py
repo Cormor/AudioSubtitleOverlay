@@ -12,9 +12,21 @@ import sys
 import time
 
 
+CUDA_RUNTIME_DLLS=('cublas64_12.dll','cublasLt64_12.dll','cudnn64_9.dll',
+                   'nvrtc64_120_0.dll','nvrtc-builtins64_129.dll')
 
-def link_shared_model_caches(real_data, isolated_data, *, create_link=None):
-    """Expose managed caches without converting them into a custom model path."""
+
+def recognition_may_use_cuda(settings):
+    model=settings['recognition_model'];device=settings['recognition_device']
+    if not isinstance(model,str) or not isinstance(device,str):
+        raise TypeError('Recognition model/device must be saved strings')
+    return model!='sensevoice-int8' and not model.startswith('zipformer-') and device!='CPU（int8）'
+
+
+def link_shared_model_caches(real_data, isolated_data, *, create_link=None,reuse_cuda_runtime=False):
+    """Expose existing caches without converting them into custom overrides."""
+    if type(reuse_cuda_runtime) is not bool:
+        raise TypeError('CUDA cache reuse flag must be bool')
     real_data = Path(real_data).resolve(strict=True)
     isolated_data = Path(isolated_data).resolve(strict=True)
     if real_data == isolated_data:
@@ -24,6 +36,22 @@ def link_shared_model_caches(real_data, isolated_data, *, create_link=None):
             subprocess.run(['cmd.exe','/d','/c','mklink','/J',str(destination),str(source)],
                            check=True,capture_output=True)
     pairs = [(isolated_data / name, real_data / name) for name in ('models', 'translation_models')]
+    unavailable=None
+    if reuse_cuda_runtime:
+        source=real_data/'runtime/cuda12';destination=isolated_data/'runtime/cuda12'
+        parent=destination.parent
+        occupied=lambda path:path.exists() or path.is_symlink() or getattr(path,'is_junction',lambda:False)()
+        if occupied(parent) and (parent.is_symlink() or getattr(parent,'is_junction',lambda:False)() or not parent.is_dir()):
+            raise ValueError('Isolated runtime parent must be an owned ordinary directory')
+        if occupied(source):
+            directories=[source,source/'bin',*(source/'nvidia'/package/'bin' for package in ('cublas','cudnn','cuda_nvrtc'))]
+            if not source.is_dir() or any(not any((folder/name).is_file() and (folder/name).stat().st_size>0
+                    for folder in directories) for name in CUDA_RUNTIME_DLLS):
+                raise ValueError('Existing formal CUDA runtime cache is incomplete; not repaired by acceptance')
+            pairs.append((destination,source))
+        else:
+            if occupied(destination):raise ValueError('Isolated CUDA cache cannot be bound to a missing formal cache')
+            unavailable=dict(cache='runtime/cuda12',shared=False,reason='No existing formal CUDA cache; original preparation/fallback policy unchanged')
     for destination, source in pairs:
         if not source.is_dir():
             raise ValueError(f'Shared model cache is not available: {source}')
@@ -33,9 +61,53 @@ def link_shared_model_caches(real_data, isolated_data, *, create_link=None):
             raise ValueError(f'Isolated cache already has a different target: {destination}')
     for destination, source in pairs:
         if not destination.exists():
+            destination.parent.mkdir(parents=True,exist_ok=True)
             create_link(destination, source)
         if not destination.is_dir() or not destination.samefile(source):
             raise RuntimeError(f'Shared cache link did not resolve to its source: {destination}')
+    records=[dict(cache=destination.relative_to(isolated_data).as_posix(),source=str(source),
+                  destination=str(destination),shared=True) for destination,source in pairs]
+    if unavailable is not None:records.append(unavailable)
+    return records
+
+
+def build_acceptance_settings(formal, *, model=None, source_language=None, target_language='英语',
+                              show_main=False, source_name=None, keep_source_selection=False,
+                              keep_recognition_selection=False, mouse_passthrough=None):
+    """Build isolated settings without mutating the formal user's selection."""
+    if not isinstance(formal,dict):
+        raise TypeError('Formal settings must be a JSON object')
+    if type(keep_source_selection) is not bool or type(keep_recognition_selection) is not bool:
+        raise TypeError('Selection preservation flags must be bool')
+    if mouse_passthrough is not None and type(mouse_passthrough) is not bool:
+        raise TypeError('Mouse passthrough override must be bool or None')
+    if keep_recognition_selection and (model is not None or source_language is not None):
+        raise ValueError('Keep recognition selection cannot be combined with model/source-language overrides')
+    if keep_recognition_selection:
+        required={'recognition_model','recognition_device','model_path','source_language'}
+        if not required<=formal.keys():
+            raise ValueError('Formal recognition selection is incomplete')
+    if not keep_source_selection and (not isinstance(source_name,str) or not source_name.strip()):
+        raise ValueError('Default speaker name is required for source override')
+    settings=dict(formal)
+    settings.update(auto_start=True,start_minimized=not show_main,target_language=target_language,
+                    translation_enabled=True,translation_backend='仅使用本地翻译',
+                    overlay_geometry='720x300+80+120',overlay_topmost=False,ui_theme='dark')
+    if not keep_recognition_selection:
+        settings.update(recognition_model=model or 'sensevoice-int8',recognition_device='CPU（int8）',
+                        model_path='',source_language=source_language or '自动检测')
+    if not keep_source_selection:
+        settings['loopback_device']='系统播放：'+source_name
+    elif 'loopback_device' not in formal:
+        raise ValueError('Formal audio source selection is incomplete')
+    if mouse_passthrough is not None:
+        settings['overlay_mouse_passthrough'] = mouse_passthrough
+    return settings
+
+
+def requested_recognition_selection(settings):
+    return {key:value for key,value in settings.items()
+            if key.startswith('recognition_') or key in {'model_path','source_language'}}
 
 
 def windows_for_pid(pid):
@@ -93,17 +165,26 @@ def process_snapshot(executable):
     return [value] if isinstance(value,dict) else value
 
 
-def main():
+def parse_arguments(argv=None):
     parser=argparse.ArgumentParser()
     parser.add_argument('--exe',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--seconds',type=int,default=3600)
     parser.add_argument('--show-main',action='store_true',help='Keep the isolated acceptance main window visible for real settings interaction')
-    parser.add_argument('--model',choices=['sensevoice-int8','tiny.en','zipformer-zh-en-medium-int8'],default='sensevoice-int8')
-    parser.add_argument('--source-language',choices=['自动检测','中文','英语'],default='自动检测')
+    parser.add_argument('--model',choices=['sensevoice-int8','tiny.en','zipformer-zh-en-medium-int8'],default=None)
+    parser.add_argument('--source-language',choices=['自动检测','中文','英语'],default=None)
     parser.add_argument('--target-language',choices=['中文','英语'],default='英语')
     parser.add_argument('--keep-source-selection',action='store_true',help='验证正式配置原有音源策略，仍使用独立APPDATA')
-    args=parser.parse_args()
+    parser.add_argument('--keep-recognition-selection',action='store_true',help='保留正式识别模型、设备、自定义路径、识别语言和全部识别参数，仅在隔离配置验收')
+    parser.add_argument('--mouse-passthrough',action=argparse.BooleanOptionalAction,default=None,help='仅覆盖隔离验收的鼠标穿透偏好；默认保留正式偏好，生效状态另做原生读回')
+    args=parser.parse_args(argv)
+    if args.keep_recognition_selection and (args.model is not None or args.source_language is not None):
+        parser.error('--keep-recognition-selection cannot be combined with --model or --source-language')
+    return args
+
+
+def main():
+    args=parse_arguments()
     exe=args.exe.resolve();output=args.output.resolve();output.mkdir(parents=True,exist_ok=True)
     if not exe.is_file() or exe.name!='AudioSubtitleOverlay.exe':raise ValueError('Expected installed app executable')
     if args.keep_source_selection:
@@ -115,15 +196,15 @@ def main():
     real=Path(os.environ['APPDATA'])/'AudioSubtitleOverlay'
     formal=(real/'settings.json').read_bytes();formal_hash=hashlib.sha256(formal).hexdigest()
     data=output/'isolated-appdata'/'AudioSubtitleOverlay';data.mkdir(parents=True,exist_ok=True)
-    link_shared_model_caches(real, data)
-    import soundcard
-    source=str(soundcard.default_speaker().name)
-    settings=json.loads(formal)
-    settings.update(auto_start=True,start_minimized=not args.show_main,source_language=args.source_language,target_language=args.target_language,
-                    recognition_model=args.model,recognition_device='CPU（int8）',model_path='',
-                    loopback_device='系统播放：'+source,translation_enabled=True,translation_backend='仅使用本地翻译',
-                    overlay_geometry='720x300+80+120',overlay_topmost=False,ui_theme='dark')
-    if args.keep_source_selection:settings['loopback_device']=json.loads(formal)['loopback_device']
+    source=None
+    if not args.keep_source_selection:
+        import soundcard
+        source=str(soundcard.default_speaker().name)
+    settings=build_acceptance_settings(json.loads(formal),model=args.model,source_language=args.source_language,
+        target_language=args.target_language,show_main=args.show_main,source_name=source,
+        keep_source_selection=args.keep_source_selection,keep_recognition_selection=args.keep_recognition_selection,
+        mouse_passthrough=args.mouse_passthrough)
+    cache_links=link_shared_model_caches(real,data,reuse_cuda_runtime=recognition_may_use_cuda(settings))
     (data/'settings.json').write_text(json.dumps(settings,ensure_ascii=False),encoding='utf-8')
     env=os.environ.copy();env['APPDATA']=str(data.parent)
     env['PYTHONIOENCODING']='utf-8'
@@ -137,7 +218,11 @@ def main():
                                  creationflags=subprocess.CREATE_NO_WINDOW)
         run_record = dict(pid=process.pid, exe=str(exe), target_seconds=args.seconds,
                           started_epoch=run_started_epoch, executable_sha256=executable_hash,
-                          trace_root=str(trace_root))
+                          trace_root=str(trace_root),
+                          shared_cache_links=cache_links,
+                          keep_recognition_selection=args.keep_recognition_selection,
+                          requested_recognition_selection=requested_recognition_selection(settings),
+                          requested_mouse_passthrough=settings.get("overlay_mouse_passthrough",False))
         (output/'process.json').write_text(json.dumps(run_record,indent=2),encoding='utf-8')
         counts={'source_submissions':0,'translation_received':0,'translation_submissions':0,'health':0,'errors':0}
         offset=0;started=time.monotonic();next_status=0;next_capture=45;captures=0;snapshots=[]

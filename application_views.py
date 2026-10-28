@@ -125,6 +125,7 @@ def build_workspace(self) -> None:
     for row,var in ((4,self.device_hint_var),(5,self.model_hint_var)):
         ttk.Label(model_frame,textvariable=var,style="Muted.TLabel",wraplength=820,justify="left").grid(row=row,column=0,columnspan=3,sticky="w",pady=(8,0))
     self.model_var.trace_add("write", self._update_model_description)
+    self.model_var.trace_add("write", self._refresh_parameter_hints)
     self.device_var.trace_add("write", self._update_model_description)
     self._update_model_description()
 
@@ -157,6 +158,22 @@ def build_workspace(self) -> None:
     ttk.Button(preview_actions, text="导出最近字幕 TXT", command=self._export_transcript).pack(side="left")
     ttk.Label(preview_frame, textvariable=self.transcript_notice_var, style="Muted.TLabel", wraplength=820).pack(anchor="w", pady=(6, 0))
     preview_frame.bind("<Configure>", lambda e: self._resize_preview(e.width))
+    self._mouse_passthrough_frame = mouse_frame = ttk.LabelFrame(appearance, text="字幕窗鼠标操作", padding=14)
+    mouse_frame.pack(fill="x", pady=(0,10))
+    mouse_frame.columnconfigure(0, weight=1)
+    self.mouse_passthrough_check = ttk.Checkbutton(mouse_frame, text="让鼠标穿过字幕窗", variable=self.mouse_passthrough_var,
+                    onvalue=1, offvalue=0, command=self._on_mouse_passthrough_toggle)
+    self.mouse_passthrough_check.grid(row=0,column=0,sticky="w")
+    self._mouse_restore_button = ttk.Button(mouse_frame, text="恢复鼠标操作", command=self._restore_mouse_operation)
+    self._mouse_restore_button.grid(row=0,column=1,sticky="e")
+    self._mouse_status_label = ttk.Label(mouse_frame, textvariable=self.mouse_passthrough_status_var,
+              style="Info.TLabel", wraplength=680, justify="left")
+    self._mouse_status_label.grid(row=1,column=0,columnspan=2,sticky="ew",pady=(6,8))
+    self._mouse_help_label = ttk.Label(mouse_frame, text="开启后，文字、空白和边缘都直接交给下方窗口；字幕继续更新。窗口外恢复：本页按钮或右下角托盘的“恢复鼠标操作”。",
+              style="Muted.TLabel", wraplength=680, justify="left")
+    self._mouse_help_label.grid(row=2,column=0,columnspan=2,sticky="ew",pady=(8,0))
+    self._sync_mouse_passthrough_control()
+    mouse_frame.bind("<Configure>", self._layout_mouse_controls, add="+")
     overlay_frame = ttk.LabelFrame(appearance, text="字幕窗外观", padding=14)
     overlay_frame.pack(fill="x", pady=(0, 10))
     self._build_overlay_controls(overlay_frame)
@@ -185,73 +202,21 @@ def build_workspace(self) -> None:
     ttk.Checkbutton(startup, text="启动后自动开始识别", variable=self.auto_start_var).pack(anchor="w")
     ttk.Checkbutton(startup, text="启动后收进右下角托盘", variable=self.start_minimized_var).pack(anchor="w")
     ttk.Label(startup, text="关闭或最小化收进托盘。Ctrl+Enter 开始／停止，Esc 收进托盘，Ctrl+Q 退出。", wraplength=680).pack(anchor="w", pady=(6,0))
-    quality_frame = ttk.LabelFrame(advanced, text="识别质量", padding=12)
+    quality_frame = ttk.LabelFrame(advanced, text="识别质量 · 仅Whisper使用", padding=12)
     quality_frame.pack(fill="x", pady=(0, 10))
-    self._add_labeled_combo(
-        quality_frame,
-        0,
-        "搜索范围",
-        self.beam_size_var,
-        [str(value) for value in RECOGNITION_BEAM_SIZES],
-        width=12,
-    )
-    ttk.Label(
-        quality_frame,
-        text="数值越大通常越准，但推理更慢。",
-        style="Muted.TLabel",
-    ).grid(row=0, column=2, padx=(10, 0), pady=5, sticky="w")
-    self._add_labeled_combo(
-        quality_frame,
-        1,
-        "参考前文",
-        self.context_var,
-        ["关闭", "启用"],
-        width=12,
-    )
-    ttk.Label(
-        quality_frame,
-        text="结合当前音频窗口内的前文；出现重复时可关闭。",
-        style="Muted.TLabel",
-    ).grid(row=1, column=2, padx=(10, 0), pady=5, sticky="w")
-    self._add_labeled_combo(
-        quality_frame,
-        2,
-        "解码回退",
-        self.temperature_var,
-        list(_TEMPERATURE_LABELS.values()),
-        width=28,
-    )
-    ttk.Label(
-        quality_frame,
-        text="遇到低概率或重复结果时再尝试备用温度，可能增加耗时。",
-        style="Muted.TLabel",
-    ).grid(row=2, column=2, padx=(10, 0), pady=5, sticky="w")
+    self._add_parameter_combo(quality_frame, 0, "beam_size", width=18)
+    self._add_labeled_combo(quality_frame, 2, "参考前文", self.context_var, ["关闭", "启用"], width=18)
+    ttk.Label(quality_frame, text="仅Whisper：结合当前音频窗口内的前文；出现重复时可关闭。",
+              style="Muted.TLabel", wraplength=620).grid(row=3, column=1, columnspan=2, sticky="ew", pady=(0,10))
+    self._add_parameter_combo(quality_frame, 4, "temperature_schedule", width=28)
     quality_frame.columnconfigure(1, weight=1)
-
-    # 参数说明另起一行，缩窄窗口时不挤出卡片。
-    for child in quality_frame.winfo_children():
-        info = child.grid_info()
-        row, column = int(info["row"]), int(info["column"])
-        if column == 2:
-            child.configure(wraplength=620)
-            child.grid_configure(row=row * 2 + 1, column=1, columnspan=2, padx=0, pady=(0,10))
-        else:
-            child.grid_configure(row=row * 2)
     tuning = ttk.LabelFrame(advanced, text="更多模型参数", padding=12)
     tuning.pack(fill="x", pady=(0,10))
-    descriptions = {
-        "window_seconds": ("最大音频窗口（秒）", "保留的语音上下文上限；越长越费时。已确认的停顿仍会分窗。"),
-        "update_interval": ("最短更新间隔（秒）", "更短会更频繁尝试识别，不保证能按时出字；CPU 最短仍为 0.5 秒。"),
-        "repetition_penalty": ("重复惩罚", "1 为不额外惩罚；调高可能减少重复，也可能漏掉正常重复用词。"),
-        "no_repeat_ngram_size": ("禁止重复词元组", "0 为关闭；非零可能抑制模型重复，也可能删掉本来应该重复的内容。"),
-        "no_speech_threshold": ("无语音判定阈值", "越低越容易跳过疑似无语音片段；过低可能漏掉轻声。"),
-        "vad_silence_ms": ("语音分段停顿（毫秒）", "检测到多长停顿时切分语音；太短可能切碎说话，不是等待整句的时间。"),
-    }
-    for row, (name, choices) in enumerate(RECOGNITION_NUMERIC_OPTIONS.items()):
-        label, hint = descriptions[name]
-        self._add_labeled_combo(tuning, row*2, label, self.recognition_vars[name], [str(value) for value in choices], width=18)
-        ttk.Label(tuning, text=hint, style="Muted.TLabel", wraplength=620).grid(row=row*2+1, column=1, columnspan=2, sticky="w", pady=(0,10))
+    for row, name in enumerate(RECOGNITION_NUMERIC_OPTIONS):
+        self._add_parameter_combo(tuning, row*2, name, width=18)
     tuning.columnconfigure(1, weight=1)
+    ttk.Label(tuning, text="键入只编辑草稿；Enter或离开字段应用，Esc还原。推荐值不限制自定义。",
+              style="Muted.TLabel", wraplength=620).grid(row=12,column=1,columnspan=2,sticky="ew",pady=(4,0))
 
 
     model_details = ttk.LabelFrame(models, text="自定义模型与应用音频", padding=12)

@@ -97,6 +97,7 @@ secrets.json
 !/tools/verify_design.py
 !/tools/verify_installed_recovery.py
 !/tools/verify_installed_runtime.py
+!/tools/verify_overlay_passthrough.py
 !/tools/verify_refactor_runtime.py
 !/tools/verify_streaming_translation.py
 !/tools/verify_tab_states.py

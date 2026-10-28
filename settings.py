@@ -12,16 +12,11 @@ from pathlib import Path
 from typing import ClassVar
 
 
-RECOGNITION_BEAM_SIZES = (1, 3, 5)
-RECOGNITION_NUMERIC_OPTIONS = {
-    "window_seconds": (8, 12, 16),
-    "update_interval": (0.1, 0.25, 0.5, 0.75, 1.0),
-    "repetition_penalty": (1.0, 1.05, 1.1, 1.2),
-    "no_repeat_ngram_size": (0, 3, 5, 8),
-    "no_speech_threshold": (0.3, 0.6, 0.8),
-    "vad_silence_ms": (200, 400, 600, 800),
-}
-RECOGNITION_TEMPERATURE_SCHEDULES = ("0", "0,0.2,0.4")
+from recognition_parameters import (
+    PARAMETERS, ParameterValueError, numeric_value, temperature_text,
+    RECOGNITION_BEAM_SIZES, RECOGNITION_NUMERIC_OPTIONS,
+    RECOGNITION_TEMPERATURE_SCHEDULES,
+)
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _GEOMETRY_RE = re.compile(r"^\d{1,5}x\d{1,5}[+-]\d{1,6}[+-]\d{1,6}$")
 
@@ -79,6 +74,7 @@ class Settings:
     overlay_font_size: int = 24
     overlay_translation_font_size: int = 20
     overlay_topmost: bool = True
+    overlay_mouse_passthrough: bool = False
     overlay_auto_height: bool = True
     overlay_animation: bool = True
     overlay_geometry: str = "680x180+80+80"
@@ -127,14 +123,6 @@ class Settings:
                         raise ValueError(key)
                 except (TypeError, ValueError):
                     return cls._invalid_config(f"{key} 无效，原配置已保留")
-        if "recognition_beam_size" in values:
-            try:
-                beam_size = int(values["recognition_beam_size"])
-                values["recognition_beam_size"] = (
-                    beam_size if beam_size in RECOGNITION_BEAM_SIZES else cls.recognition_beam_size
-                )
-            except (TypeError, ValueError):
-                values.pop("recognition_beam_size")
         if "recognition_condition_on_previous_text" in values:
             condition = values["recognition_condition_on_previous_text"]
             if isinstance(condition, str):
@@ -143,23 +131,22 @@ class Settings:
                 }
             else:
                 values["recognition_condition_on_previous_text"] = bool(condition)
-        for key in ("overlay_auto_height", "overlay_animation", "overlay_topmost", "translation_enabled", "auto_start", "start_minimized", "show_runtime_details"):
+        for key in ("overlay_auto_height", "overlay_animation", "overlay_topmost", "overlay_mouse_passthrough", "translation_enabled", "auto_start", "start_minimized", "show_runtime_details"):
             if key in values and not isinstance(values[key], bool):
                 values[key] = str(values[key]).lower() in {"1", "true", "yes", "on", "启用"}
-        if "recognition_temperature_schedule" in values and values[
-            "recognition_temperature_schedule"
-        ] not in RECOGNITION_TEMPERATURE_SCHEDULES:
-            values.pop("recognition_temperature_schedule")
-        for name, choices in RECOGNITION_NUMERIC_OPTIONS.items():
+        for name in PARAMETERS:
             key = "recognition_" + name
             if key in values:
                 try:
-                    value = type(choices[0])(values[key])
-                    if value not in choices:
-                        raise ValueError(key)
-                    values[key] = value
-                except (TypeError, ValueError, OverflowError):
-                    values.pop(key)
+                    values[key] = numeric_value(name, values[key])
+                except ParameterValueError as error:
+                    return cls._invalid_config(f"{key}无效，原配置已保留：{error}")
+        key = "recognition_temperature_schedule"
+        if key in values:
+            try:
+                values[key] = temperature_text(values[key])
+            except ParameterValueError as error:
+                return cls._invalid_config(f"{key}无效，原配置已保留：{error}")
         for key in ("overlay_font_size", "overlay_translation_font_size"):
             if key in values and (type(values[key]) is not int or not 8 <= values[key] <= 96):
                 return cls._invalid_config(f"{key} 超出有效范围，原配置已保留")
@@ -205,6 +192,14 @@ class Settings:
         path = application_data_dir() / "settings.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         persistent = {item.name: getattr(self, item.name) for item in fields(self) if item.init}
+        try:
+            for name in PARAMETERS:
+                key = "recognition_" + name
+                persistent[key] = numeric_value(name, persistent[key])
+            key = "recognition_temperature_schedule"
+            persistent[key] = temperature_text(persistent[key])
+        except ParameterValueError as error:
+            raise SettingsLoadError(f"识别参数未保存：{error}") from error
         payload = {**self._extra, **persistent}
         payload["schema_version"] = 2
         temp_path = None
