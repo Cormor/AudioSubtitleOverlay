@@ -1,4 +1,6 @@
 import unittest
+import sys
+from types import ModuleType
 from unittest.mock import Mock, patch
 from translation import TranslationService, ArgosTranslator, _local_models_ready
 
@@ -32,7 +34,9 @@ class TranslationLanguageAdapterTests(unittest.TestCase):
         from types import SimpleNamespace
         package=SimpleNamespace()
         translator=ArgosTranslator()
-        with patch('translation._model_package_pairs',return_value=[('zh','en',package)]), \
+        modules = {name: ModuleType(name) for name in ('ctranslate2', 'sentencepiece')}
+        with patch.dict(sys.modules, modules), \
+             patch('translation._model_package_pairs',return_value=[('zh','en',package)]), \
              patch.object(translator,'_ensure_model',return_value='cached'), \
              patch.object(translator,'_load_model',return_value='model'), \
              patch.object(translator,'_translate_with_model',return_value='water') as translate:

@@ -14,7 +14,10 @@ class HeaderContrastTests(unittest.TestCase):
         item._latest_translation_state=state
         return item
     def font(self):
-        return ImageFont.truetype(str(Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts/msyh.ttc'),11)
+        if os.name == 'nt':
+            return ImageFont.truetype(str(Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts/msyh.ttc'),11)
+        # Pixel alpha/stroke checks use Pillow's bundled FreeType font in CI.
+        return ImageFont.load_default(size=11)
     def test_production_header_has_opaque_text_and_dark_stroke_without_backplate(self):
         p=palette('dark')
         foreground=OverlayWindow._rgba_with_alpha(p['text'],255)
