@@ -11,6 +11,7 @@ import queue
 import multiprocessing
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
@@ -1703,6 +1704,10 @@ class Application:
         if self._closing:
             return
         self._in_event_drain = True
+        # A count limit alone allows 100 costly callbacks to monopolize Tk.
+        # Preserve FIFO and pending work, but give input/paint events a turn.
+        deadline = time.perf_counter() + .006
+        more_pending = False
         try:
             for _ in range(100):
                 try:
@@ -1712,13 +1717,16 @@ class Application:
                 if self._closing or getattr(self, "_exit_requested", False):
                     break
                 callback(*args)
+                if time.perf_counter() >= deadline:
+                    more_pending = not self._events.empty()
+                    break
         finally:
             self._in_event_drain = False
             # 一个定时批次只提交一次悬浮窗快照，避免识别频率直接决定重绘频率。
             if not self._closing and not getattr(self, "_exit_requested", False):
                 self._flush_display()
                 if not self._closing and not getattr(self, "_exit_requested", False):
-                    self._drain_after_id = self.root.after(10, self._drain_events)
+                    self._drain_after_id = self.root.after(1 if more_pending else 10, self._drain_events)
 
     def _flush_display(self) -> None:
         """将显示模块的脏状态一次性提交给主窗口和悬浮窗。"""

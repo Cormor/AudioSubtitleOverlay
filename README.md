@@ -5,7 +5,7 @@
 <p align="center"><strong>把电脑里的声音，变成看得见的字幕。</strong></p>
 <p align="center">简体中文 · <a href="README.en.md">English</a> · <a href="https://github.com/Cormor/AudioSubtitleOverlay/releases/latest">下载最新版</a> · <a href="docs/technical-guide.md">技术文档</a></p>
 
-**当前源码工作版为2.2.0；已上传GitHub的2.1源码检查点与已发布下载1.4.1分别保留。2.2的[控件、自定义参数与鼠标穿透](docs/controls-input-2.2.0.md)沿用当前字幕和翻译链路；[译文随语音更新](docs/streaming-translation.md)及工程验证见[维护说明](docs/refactor-2.0.md)。源码和本机安装状态分别以对应交付回执为准。**
+**当前版本为 2.2.1，改善设置页切换与字幕绘制，保持现有界面和功能。** Windows 固定场景中，五页切换中位耗时降低约 35%，常规字幕图像合成中位耗时降低约 21%；测量条件和范围见[性能维护说明](docs/ui-performance.md)。[控件、自定义参数与鼠标穿透](docs/controls-input-2.2.0.md)及[译文随语音更新](docs/streaming-translation.md)继续沿用。
 
 看视频、听直播、上网课，或把麦克风中的讲话转成文字：声幕会在 Windows 桌面浮窗中显示字幕，还能在原文下方显示译文。无需给视频文件先做转写，也不需要安装 Python。
 
@@ -30,8 +30,8 @@
 
 | 文件 | 用途 |
 |---|---|
-| **`AudioSubtitleOverlay_Portable_v1.4.1.zip`** | **主程序，第一次使用下载这个。** 适用于 Windows 10/11 64 位电脑。 |
-| `AudioSubtitleOverlay_tiny_model_v1.4.1.zip` | 可选的 Whisper tiny 模型。只有手动选择这个模型、并希望离线准备它时才需要。 |
+| **`AudioSubtitleOverlay_Portable_v2.2.1.zip`** | **主程序，第一次使用下载这个。** 适用于 Windows 10/11 64 位电脑。 |
+| `AudioSubtitleOverlay_tiny_model_v2.2.1.zip` | 可选的 Whisper tiny 模型。只有手动选择这个模型、并希望离线准备它时才需要。 |
 | `SHA256SUMS.txt` | 文件校验值，供需要检查下载完整性时使用。 |
 
 GitHub 自动提供的 **Source code (zip/tar.gz)** 是源码，不能当作主程序双击运行。默认 SenseVoice 模型不包含在可选 tiny 包中，会在首次使用时单独准备。

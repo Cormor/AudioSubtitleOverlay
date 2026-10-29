@@ -1,6 +1,6 @@
 # Shengmu · Live Captions and Translation
 
-The working source version is 2.2.0. The uploaded 2.1 source checkpoint and the published 1.4.1 download retain their own version history. See [controls, custom parameters, and mouse passthrough](docs/controls-input-2.2.0.md), the [streaming translation guide](docs/streaming-translation.md), and [engineering notes](docs/refactor-2.0.md). Source changes and installed-build verification are recorded separately.
+**Version 2.2.1 improves settings-page switching and caption rendering while preserving the existing interface and features.** In a fixed Windows benchmark, median page-switch processing time fell by about 35% and median regular caption-image composition time by about 21%. See the [performance notes](docs/ui-performance.md) for measurement scope. Existing [controls, custom parameters, and mouse passthrough](docs/controls-input-2.2.0.md) and [streaming translation](docs/streaming-translation.md) are retained.
 
 <p align="center"><img src="assets/brand/icon.png" alt="Shengmu icon" width="88"></p>
 
@@ -32,8 +32,8 @@ Follow videos, livestreams, and online classes, or transcribe speech from a micr
 
 | File | What it is for |
 |---|---|
-| **`AudioSubtitleOverlay_Portable_v1.4.1.zip`** | **The app. Download this first.** For 64-bit Windows 10/11 PCs. |
-| `AudioSubtitleOverlay_tiny_model_v1.4.1.zip` | Optional Whisper tiny model, for users who manually select it and want to prepare it offline. |
+| **`AudioSubtitleOverlay_Portable_v2.2.1.zip`** | **The app. Download this first.** For 64-bit Windows 10/11 PCs. |
+| `AudioSubtitleOverlay_tiny_model_v2.2.1.zip` | Optional Whisper tiny model, for users who manually select it and want to prepare it offline. |
 | `SHA256SUMS.txt` | Checksums for checking download integrity. |
 
 The automatic **Source code (zip/tar.gz)** downloads contain source, not the ready-to-run app. The optional tiny package does **not** contain the default SenseVoice model; that model is prepared separately on first use.

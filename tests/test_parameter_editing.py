@@ -540,14 +540,22 @@ class InvalidParameterAppearanceTests(unittest.TestCase):
                     prefix = theme._elements(root, style, palette)
                 states = elements[prefix + "Entry"]
                 image = next(item[-1] for item in states[2:] if isinstance(item, tuple) and item[:-1] == ("focus", "invalid"))
-                colors = set(image.getdata())
+                # Theme assets may be precomposited RGB; compare the displayed
+                # color contract with an explicit opaque alpha channel.
+                colors = set(image.convert("RGBA").getdata())
                 for token in ("danger", "focus"):
                     rgb = ImageColor.getrgb(palette[token])
-                    distance = min(max(abs(color[i]-rgb[i]) for i in range(3))
-                                   for color in colors if color[3] >= 230)
+                    background = ImageColor.getrgb(palette["surface"])
+                    # The original assertion accepted edge coverage >=230/255.
+                    # Compare those same displayed colors after precompositing,
+                    # while retaining the original 8-channel tolerance.
+                    expected = [tuple(round((rgb[i]*alpha + background[i]*(255-alpha))/255)
+                                      for i in range(3)) for alpha in range(230, 256)]
+                    distance = min(max(abs(color[i]-target[i]) for i in range(3))
+                                   for color in colors if color[3] >= 230 for target in expected)
                     self.assertLessEqual(distance, 8, token)
                 disabled = states[2][-1]
-                self.assertNotIn((*ImageColor.getrgb(palette["danger"]), 255), set(disabled.getdata()))
+                self.assertNotIn((*ImageColor.getrgb(palette["danger"]), 255), set(disabled.convert("RGBA").getdata()))
 
 
 class _WrappingLabel:

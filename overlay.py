@@ -926,6 +926,28 @@ class OverlayWindow:
                   stroke_width=1, stroke_fill=colors[1])
         draw.line((10, 28, width - 10, 28), fill=(255, 255, 255, 28), width=1)
 
+    def _panel_images(self, width: int, height: int):
+        """单实例只保留当前底板和圆角蒙版；合成时不修改缓存图像。"""
+        opacity = max(0, min(255, round(255 * self.settings.overlay_background_opacity)))
+        key = (width, height, self.corner_radius, self.settings.overlay_background, opacity)
+        cached = getattr(self, "_panel_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1], cached[2]
+        background = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        ImageDraw.Draw(background).rounded_rectangle(
+            (0, 0, width - 1, height - 1),
+            radius=self.corner_radius,
+            fill=self._rgba_with_alpha(self.settings.overlay_background, opacity),
+            outline=(255, 255, 255, min(48, opacity)),
+            width=1,
+        )
+        mask = Image.new("L", (width, height), 0)
+        ImageDraw.Draw(mask).rounded_rectangle(
+            (0, 0, width - 1, height - 1), radius=self.corner_radius, fill=255,
+        )
+        self._panel_cache = key, background, mask
+        return background, mask
+
     def _draw_content(self, font_size: int, now: float) -> int:
         """使用超采样 RGBA 图像绘制，固定最新字幕组并保留历史滚动位置。"""
         scale = self.render_scale
@@ -1015,17 +1037,8 @@ class OverlayWindow:
         if self.settings.overlay_text_opacity != 1.0:
             foreground.putalpha(foreground.getchannel("A").point(lambda value: round(value * self.settings.overlay_text_opacity)))
         # 一张圆角玻璃：底板 + 正文 + 控件，最后统一裁进同一圆角。
-        opacity = max(0, min(255, round(255 * self.settings.overlay_background_opacity)))
-        image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        panel = ImageDraw.Draw(image)
-        panel.rounded_rectangle(
-            (0, 0, width - 1, height - 1),
-            radius=self.corner_radius,
-            fill=self._rgba_with_alpha(self.settings.overlay_background, opacity),
-            outline=(255, 255, 255, min(48, opacity)),
-            width=1,
-        )
-        image = Image.alpha_composite(image, foreground)
+        background, mask = self._panel_images(width, height)
+        image = Image.alpha_composite(background, foreground)
         overlay_ui = ImageDraw.Draw(image)
         tail = self._full_tail_offset()
         # 隐藏式滚动条：悬停/滚轮时才出现，不改悬浮窗底色。
@@ -1055,12 +1068,6 @@ class OverlayWindow:
             overlay_ui.line((width - 20 + offset, height - 7, width - 7, height - 20 + offset),
                             fill=(140, 204, 222, 180), width=2)
         # 同一圆角蒙版，角上不会露出第二层边角。
-        mask = Image.new("L", (width, height), 0)
-        ImageDraw.Draw(mask).rounded_rectangle(
-            (0, 0, width - 1, height - 1),
-            radius=self.corner_radius,
-            fill=255,
-        )
         alpha = image.getchannel("A")
         image.putalpha(ImageChops.darker(alpha, mask))
         self._last_image = image

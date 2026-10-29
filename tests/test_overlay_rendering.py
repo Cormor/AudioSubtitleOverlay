@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from PIL import ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 from overlay import OverlayWindow
 from settings import Settings
@@ -66,6 +66,50 @@ class OverlayRenderingTests(unittest.TestCase):
         lane.translation_output(1)
         lane.maybe_collapse_if_idle(100)
         self.assertIn("Translation", [line["text"] for line in self.render(overlay)])
+
+    def test_panel_cache_matches_uncached_pixels_after_each_dependency_changes(self):
+        overlay = self.overlay()
+        cases = [(680, 300, "#000000", 0.0, 0),
+                 (680, 300, "#000000", 0.35, 0),
+                 (680, 300, "#245678", 0.35, 0),
+                 (680, 300, "#245678", 0.35, 23),
+                 (720, 300, "#245678", 0.35, 23),
+                 (720, 340, "#245678", 0.35, 23),
+                 (680, 300, "#fafafa", 1.0, 12)]
+        for width, height, color, opacity, radius in cases:
+            with self.subTest(width=width, height=height, color=color, opacity=opacity, radius=radius):
+                overlay.settings.overlay_background = color
+                overlay.settings.overlay_background_opacity = opacity
+                overlay.corner_radius = radius
+                background, mask = overlay._panel_images(width, height)
+                alpha = max(0, min(255, round(255 * opacity)))
+                expected = Image.new("RGBA", (width, height))
+                ImageDraw.Draw(expected).rounded_rectangle(
+                    (0, 0, width - 1, height - 1), radius=radius,
+                    fill=overlay._rgba_with_alpha(color, alpha),
+                    outline=(255, 255, 255, min(48, alpha)), width=1,
+                )
+                expected_mask = Image.new("L", (width, height))
+                ImageDraw.Draw(expected_mask).rounded_rectangle(
+                    (0, 0, width - 1, height - 1), radius=radius, fill=255,
+                )
+                self.assertEqual(background.tobytes(), expected.tobytes())
+                self.assertEqual(mask.tobytes(), expected_mask.tobytes())
+                again = overlay._panel_images(width, height)
+                self.assertIs(again[0], background)
+                self.assertIs(again[1], mask)
+
+    def test_frame_composition_does_not_modify_cached_panel(self):
+        overlay = self.overlay()
+        self.render(overlay)
+        cached = overlay._panel_cache
+        background, mask = (image.tobytes() for image in cached[1:])
+        first_frame = overlay._last_image.tobytes()
+        self.render(overlay)
+        self.assertIs(overlay._panel_cache, cached)
+        self.assertEqual(cached[1].tobytes(), background)
+        self.assertEqual(cached[2].tobytes(), mask)
+        self.assertEqual(overlay._last_image.tobytes(), first_frame)
 
 
 if __name__ == "__main__":

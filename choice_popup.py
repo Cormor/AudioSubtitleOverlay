@@ -596,7 +596,9 @@ class ChoicePopupManager:
         self._tag = "ShengmuReadonlyChoices"
         root.bind_class(self._tag, "<ButtonPress-1>", self._press)
         root.bind_class(self._tag, "<KeyPress>", self._key)
-        root.bind_all("<Map>", self._mapped, add="+")
+        # Other mapped controls do not need popup setup. Keep this on the
+        # native class so page switches avoid one Python callback per widget.
+        root.bind_class("TCombobox", "<Map>", self._mapped, add="+")
         self._visit(root)
 
     def _visit(self, widget):

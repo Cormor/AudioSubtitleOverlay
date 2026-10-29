@@ -69,6 +69,8 @@ def _notebook_input_mode(root):
     tag = f"ShengmuTabInput{id(root)}"
 
     def mode(keyboard):
+        if state["keyboard"] == keyboard:
+            return
         state["keyboard"] = keyboard
         for notebook in list(notebooks):
             try:
@@ -76,7 +78,7 @@ def _notebook_input_mode(root):
             except tk.TclError:
                 pass
 
-    def attach(widget):
+    def attach(widget, *, descend=False):
         try:
             tags = widget.bindtags()
             if tag not in tags:
@@ -84,16 +86,28 @@ def _notebook_input_mode(root):
             if isinstance(widget, ttk.Notebook):
                 notebooks.add(widget)
                 widget.state(["user1" if state["keyboard"] else "!user1"])
-            for child in widget.winfo_children():
-                attach(child)
+            if descend:
+                for child in widget.winfo_children():
+                    attach(child, descend=True)
         except (tk.TclError, AttributeError):
+            pass
+
+    def mapped(path):
+        try:
+            attach(root.nametowidget(path))
+        except (KeyError, tk.TclError):
             pass
 
     root.bind_class(tag, "<KeyPress>", lambda _event: mode(True))
     root.bind_class(tag, "<ButtonPress>", lambda _event: mode(False))
-    root.bind_all("<Map>", lambda event: attach(event.widget), add="+")
+    # Every child receives its own Map event. A tab switch must not recursively
+    # rescan each mapped subtree, or cross Python for already attached widgets.
+    command = root.register(mapped)
+    root.bind_all("<Map>",
+                  f'if {{[lsearch -exact [bindtags %W] {tag}] < 0}} {{{command} %W}}',
+                  add="+")
     root._shengmu_tab_input = state
-    attach(root)
+    attach(root, descend=True)
 
 
 def _elements(root, style, p):
@@ -106,14 +120,20 @@ def _elements(root, style, p):
     prefix = f"Shengmu{len(cache)}"
     images = []
 
-    def photo(draw_fn, width=72, height=36):
+    def photo(draw_fn, width=72, height=36, *, background=None):
         image = Image.new("RGBA", (width * 4, height * 4))
         draw_fn(ImageDraw.Draw(image), 4, width, height)
-        result = ImageTk.PhotoImage(image.resize((width, height), Image.Resampling.LANCZOS), master=root)
+        image = image.resize((width, height), Image.Resampling.LANCZOS)
+        if background is not None:
+            # These elements have a fixed ttk background in every state. Blend
+            # once, rather than making Windows Tk alpha-blend every nine-slice
+            # redraw. Overlapping glyphs, rails and thumbs retain transparency.
+            image = Image.alpha_composite(Image.new("RGBA", image.size, background), image).convert("RGB")
+        result = ImageTk.PhotoImage(image, master=root)
         images.append(result)
         return result
 
-    def rounded(fill, border, focus=False, radius=8, tab=False, tab_focus=False):
+    def rounded(fill, border, focus=False, radius=8, tab=False, tab_focus=False, *, background=None):
         def draw(d, s, w, h):
             if focus:
                 d.rounded_rectangle((0, 0, (w-1)*s, (h-1)*s), radius=radius*s,
@@ -122,7 +142,7 @@ def _elements(root, style, p):
                                 fill=fill, outline=border, width=s)
             if tab:
                 d.rounded_rectangle((3*s, (h-(8 if tab_focus else 6))*s, (w-4)*s, (h-4)*s), radius=s, fill=p["accent"])
-        return photo(draw)
+        return photo(draw, background=p["surface"] if background is None else background)
 
     def element(name, fill, border, selected=False, tab=False, inset=0):
         base = rounded(fill, border, tab=tab)
@@ -159,12 +179,12 @@ def _elements(root, style, p):
         ("Entry", p["surfaceRaised"], p["controlBorder"], False),
     ):
         element(name, fill, border, selected, inset=4 if name == "Entry" else 0)
-    normal = rounded(p["canvas"], p["canvas"])
-    selected = rounded(p["surfaceRaised"], p["surfaceRaised"], tab=True)
-    tab_focus = rounded(p["surfaceRaised"], p["surfaceRaised"], tab=True, tab_focus=True)
+    normal = rounded(p["canvas"], p["canvas"], background=p["canvas"])
+    selected = rounded(p["surfaceRaised"], p["surfaceRaised"], tab=True, background=p["canvas"])
+    tab_focus = rounded(p["surfaceRaised"], p["surfaceRaised"], tab=True, tab_focus=True, background=p["canvas"])
     style.element_create(prefix+"Tab", "image", normal, ("selected", "focus", "user1", tab_focus),
-                         ("selected", selected), ("focus", "user1", rounded(p["canvas"],p["canvas"],tab=True,tab_focus=True)),
-                         ("active",rounded(p["hover"],p["hover"])), border=12, padding=0, width=24, height=24, sticky="nsew")
+                         ("selected", selected), ("focus", "user1", rounded(p["canvas"],p["canvas"],tab=True,tab_focus=True,background=p["canvas"])),
+                         ("active",rounded(p["hover"],p["hover"],background=p["canvas"])), border=12, padding=0, width=24, height=24, sticky="nsew")
 
     def indicator(selected=False, disabled=False, focus=False, hover=False, alternate=False):
         def draw(d, s, w, h):
